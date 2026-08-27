@@ -39,6 +39,7 @@ export interface TradeSignal {
   action: ActionType;
   ticker: string;
   price?: number | undefined;
+  durationMinutes?: number | undefined;
   stopLoss?: number | undefined;
   takeProfit?: number | undefined;
   rawText: string;

@@ -492,6 +492,29 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
       await selectMarket(page, signal.ticker);
     }
 
+    if (signal.durationMinutes !== undefined) {
+      logger.browser(`Setting trade duration to: ${signal.durationMinutes} minutes`);
+      const hours = Math.floor(signal.durationMinutes / 60);
+      const minutes = signal.durationMinutes % 60;
+      const timeString = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+
+      const timeInput = page
+        .locator('.section-deal__time input, input[name="time"], input[placeholder*="time" i]')
+        .first();
+
+      if (await timeInput.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await timeInput.click();
+        // Clear existing value
+        await page.keyboard.press('Control+A').catch(() => {});
+        await page.keyboard.press('Backspace').catch(() => {});
+        // Some brokers require typing slowly or directly filling
+        await timeInput.fill(timeString);
+        await page.keyboard.press('Enter').catch(() => {});
+      } else {
+        logger.warn(`Could not find time input to set ${signal.durationMinutes}m`);
+      }
+    }
+
     if (signal.price !== undefined) {
       logger.browser(`Entering amount/price: ${signal.price}`);
       const priceInput = page

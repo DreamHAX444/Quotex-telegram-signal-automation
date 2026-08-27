@@ -42,9 +42,11 @@ async function runTestSuite(): Promise<void> {
   // Format 2: Timeframe & Emoji variations
   const up1m = parseSignal('UP 1M');
   assert(up1m !== null && isUpAction(up1m.action), 'UP 1M should parse as UP');
+  assert.strictEqual(up1m.durationMinutes, 1);
 
   const down5m = parseSignal('DOWN 5M');
   assert(down5m !== null && isDownAction(down5m.action), 'DOWN 5M should parse as DOWN');
+  assert.strictEqual(down5m.durationMinutes, 5);
 
   const upEmoji = parseSignal('🟢 UP');
   assert(upEmoji !== null && isUpAction(upEmoji.action), '🟢 UP should parse as UP');
@@ -93,9 +95,11 @@ async function runTestSuite(): Promise<void> {
 
   const tickAct3 = parseSignal('EUR USD 1M UP');
   assert(tickAct3 !== null && isUpAction(tickAct3.action), 'EUR USD 1M UP should parse');
+  assert.strictEqual(tickAct3.durationMinutes, 1);
 
   const tickAct4 = parseSignal('USD/CAD 5M PUT');
   assert(tickAct4 !== null && isDownAction(tickAct4.action), 'USD/CAD 5M PUT should parse');
+  assert.strictEqual(tickAct4.durationMinutes, 5);
 
   // Format 5: Signal Prefix Formats
   const sigPref1 = parseSignal('UP SIGNAL: EUR/USD');
@@ -115,6 +119,7 @@ async function runTestSuite(): Promise<void> {
   const multi2 = parseSignal('📊 ASSET: USD/CHF OTC\n⏰ TIME: 1 MINUTE\n🟢 DIRECTION: CALL');
   assert(multi2 !== null && isUpAction(multi2.action), 'Multi-line structured CALL should parse');
   assert.strictEqual(multi2.ticker, 'USD/CHF OTC');
+  assert.strictEqual(multi2.durationMinutes, 1);
 
   const multi3 = parseSignal('GBP/JPY OTC\nDOWN 🔽');
   assert(multi3 !== null && isDownAction(multi3.action), 'Multi-line GBP/JPY OTC DOWN should parse');

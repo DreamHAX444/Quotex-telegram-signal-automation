@@ -13,6 +13,19 @@ export function cleanTicker(raw?: string | null): string {
 }
 
 /**
+ * Extracts duration in minutes from raw text (e.g. "5M", "2 MINUTES", "1H")
+ */
+export function extractDurationMinutes(text: string): number | undefined {
+  const match = text.match(/\b(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)\b/i);
+  if (match) {
+    if (match[1]) return parseInt(match[1], 10);
+    if (match[2]) return parseInt(match[2], 10);
+    if (match[3]) return parseInt(match[3], 10) * 60;
+  }
+  return undefined;
+}
+
+/**
  * Normalizes various raw ticker formats (e.g., "USD CHF OTC", "USD CHF", "USD/CHF", "eur usd")
  * into a canonical search string (e.g., "USD/CHF").
  */
@@ -509,6 +522,8 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
   if (cleanRaw.includes('\n')) {
     const multiLineSignal = parseMultiLineSignal(cleanRaw);
     if (multiLineSignal) {
+      const durationMinutes = extractDurationMinutes(cleanRaw);
+      multiLineSignal.durationMinutes = durationMinutes;
       logger.info(
         `Successfully parsed ${multiLineSignal.action} signal for ${multiLineSignal.ticker} using [STRUCTURED_MULTILINE]`
       );
@@ -519,12 +534,15 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
   // Preprocess single-line message
   const { cleaned, foundUp, foundDown } = stripEmojis(cleanRaw);
 
+  const durationMinutes = extractDurationMinutes(cleanRaw);
+
   // If message was pure emoji or emoji + timeframe (e.g., "🟢", "🔴 1M", "🔼 NOW")
   if (foundUp && !foundDown && (!cleaned || /^(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?|NOW)$/i.test(cleaned))) {
     logger.info(`Successfully parsed UP signal for ACTIVE using [EMOJI_DIRECTION]`);
     return {
       action: 'UP',
       ticker: 'ACTIVE',
+      durationMinutes,
       rawText: cleanRaw,
       timestamp: new Date(),
     };
@@ -535,6 +553,7 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
     return {
       action: 'DOWN',
       ticker: 'ACTIVE',
+      durationMinutes,
       rawText: cleanRaw,
       timestamp: new Date(),
     };
@@ -547,6 +566,7 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
       const signal = pattern.extract(match, cleanRaw);
       if (signal) {
         if (signal.ticker.length >= 1 && signal.ticker.length <= 30) {
+          signal.durationMinutes = durationMinutes; // inject duration
           logger.info(
             `Successfully parsed ${signal.action} signal for ${signal.ticker} using [${pattern.name}]`
           );

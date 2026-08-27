@@ -1,0 +1,450 @@
+import assert from 'node:assert';
+import { chromium } from 'playwright';
+import { parseSignal } from './parser.js';
+import { isUpAction, isDownAction } from './types.js';
+import { automationQueue } from './queue.js';
+import { clickTradeButton, getActiveMarket, setActiveMarket } from './executor.js';
+import type { AutomationTask, TradeSignal } from './types.js';
+
+async function runTestSuite(): Promise<void> {
+  console.log('\n========================================');
+  console.log('  Cortex Automation Test Suite          ');
+  console.log('========================================\n');
+
+  // ----------------------------------------------------
+  // TEST 1: Parser Determinism & Signal Validation
+  // ----------------------------------------------------
+  console.log('▶ Test 1: Comprehensive Parser & Direction Validation...');
+
+  // Helper action checks
+  assert(isUpAction('UP'), 'isUpAction(UP) should be true');
+  assert(isUpAction('CALL'), 'isUpAction(CALL) should be true');
+  assert(isUpAction('BUY'), 'isUpAction(BUY) should be true');
+  assert(isDownAction('DOWN'), 'isDownAction(DOWN) should be true');
+  assert(isDownAction('PUT'), 'isDownAction(PUT) should be true');
+  assert(isDownAction('SELL'), 'isDownAction(SELL) should be true');
+
+  // Format 1: STANDALONE UP / DOWN / CALL / PUT
+  const up1 = parseSignal('UP');
+  assert(up1 !== null && isUpAction(up1.action), 'UP should parse as UP action');
+  assert.strictEqual(up1.ticker, 'ACTIVE');
+
+  const down1 = parseSignal('DOWN');
+  assert(down1 !== null && isDownAction(down1.action), 'DOWN should parse as DOWN action');
+  assert.strictEqual(down1.ticker, 'ACTIVE');
+
+  const call1 = parseSignal('CALL');
+  assert(call1 !== null && isUpAction(call1.action), 'CALL should parse as UP action');
+
+  const put1 = parseSignal('PUT');
+  assert(put1 !== null && isDownAction(put1.action), 'PUT should parse as DOWN action');
+
+  // Format 2: Timeframe & Emoji variations
+  const up1m = parseSignal('UP 1M');
+  assert(up1m !== null && isUpAction(up1m.action), 'UP 1M should parse as UP');
+
+  const down5m = parseSignal('DOWN 5M');
+  assert(down5m !== null && isDownAction(down5m.action), 'DOWN 5M should parse as DOWN');
+
+  const upEmoji = parseSignal('🟢 UP');
+  assert(upEmoji !== null && isUpAction(upEmoji.action), '🟢 UP should parse as UP');
+
+  const downEmoji = parseSignal('🔴 DOWN');
+  assert(downEmoji !== null && isDownAction(downEmoji.action), '🔴 DOWN should parse as DOWN');
+
+  const arrowUp = parseSignal('🔼 UP 1 MIN');
+  assert(arrowUp !== null && isUpAction(arrowUp.action), '🔼 UP 1 MIN should parse as UP');
+
+  const arrowDown = parseSignal('🔽 DOWN NOW');
+  assert(arrowDown !== null && isDownAction(arrowDown.action), '🔽 DOWN NOW should parse as DOWN');
+
+  const justEmojiUp = parseSignal('🟢');
+  assert(justEmojiUp !== null && isUpAction(justEmojiUp.action), '🟢 should parse as UP');
+
+  const justEmojiDown = parseSignal('🔴');
+  assert(justEmojiDown !== null && isDownAction(justEmojiDown.action), '🔴 should parse as DOWN');
+
+  // Format 3: Action + Ticker
+  const actTick1 = parseSignal('UP EUR/USD');
+  assert(actTick1 !== null && isUpAction(actTick1.action), 'UP EUR/USD should parse');
+  assert.strictEqual(actTick1.ticker, 'EUR/USD');
+
+  const actTick2 = parseSignal('DOWN USD CHF OTC');
+  assert(actTick2 !== null && isDownAction(actTick2.action), 'DOWN USD CHF OTC should parse');
+  assert.strictEqual(actTick2.ticker, 'USD CHF OTC');
+
+  const actTick3 = parseSignal('CALL USD/JPY 1M');
+  assert(actTick3 !== null && isUpAction(actTick3.action), 'CALL USD/JPY 1M should parse');
+  assert.strictEqual(actTick3.ticker, 'USD/JPY');
+
+  const actTick4 = parseSignal('BUY AAPL @ 150');
+  assert(actTick4 !== null && isUpAction(actTick4.action), 'BUY AAPL @ 150 should parse');
+  assert.strictEqual(actTick4.ticker, 'AAPL');
+  assert.strictEqual(actTick4.price, 150);
+
+  // Format 4: Ticker + Action
+  const tickAct1 = parseSignal('EUR/USD UP');
+  assert(tickAct1 !== null && isUpAction(tickAct1.action), 'EUR/USD UP should parse');
+  assert.strictEqual(tickAct1.ticker, 'EUR/USD');
+
+  const tickAct2 = parseSignal('USD/CHF OTC DOWN');
+  assert(tickAct2 !== null && isDownAction(tickAct2.action), 'USD/CHF OTC DOWN should parse');
+  assert.strictEqual(tickAct2.ticker, 'USD/CHF OTC');
+
+  const tickAct3 = parseSignal('EUR USD 1M UP');
+  assert(tickAct3 !== null && isUpAction(tickAct3.action), 'EUR USD 1M UP should parse');
+
+  const tickAct4 = parseSignal('USD/CAD 5M PUT');
+  assert(tickAct4 !== null && isDownAction(tickAct4.action), 'USD/CAD 5M PUT should parse');
+
+  // Format 5: Signal Prefix Formats
+  const sigPref1 = parseSignal('UP SIGNAL: EUR/USD');
+  assert(sigPref1 !== null && isUpAction(sigPref1.action), 'UP SIGNAL: EUR/USD should parse');
+
+  const sigPref2 = parseSignal('SIGNAL: DOWN USD/CHF');
+  assert(sigPref2 !== null && isDownAction(sigPref2.action), 'SIGNAL: DOWN USD/CHF should parse');
+
+  const sigPref3 = parseSignal('BUY SIGNAL: AAPL');
+  assert(sigPref3 !== null && isUpAction(sigPref3.action), 'BUY SIGNAL: AAPL should parse');
+
+  // Format 6: Multi-line Binary Signal Formats
+  const multi1 = parseSignal('EUR/USD OTC\n1 MIN\nUP');
+  assert(multi1 !== null && isUpAction(multi1.action), 'Multi-line EUR/USD OTC 1MIN UP should parse');
+  assert.strictEqual(multi1.ticker, 'EUR/USD OTC');
+
+  const multi2 = parseSignal('📊 ASSET: USD/CHF OTC\n⏰ TIME: 1 MINUTE\n🟢 DIRECTION: CALL');
+  assert(multi2 !== null && isUpAction(multi2.action), 'Multi-line structured CALL should parse');
+  assert.strictEqual(multi2.ticker, 'USD/CHF OTC');
+
+  const multi3 = parseSignal('GBP/JPY OTC\nDOWN 🔽');
+  assert(multi3 !== null && isDownAction(multi3.action), 'Multi-line GBP/JPY OTC DOWN should parse');
+  assert.strictEqual(multi3.ticker, 'GBP/JPY OTC');
+
+  // Format 7: Markdown / Bold Formats
+  const mdUp1 = parseSignal('**UP**');
+  assert(mdUp1 !== null && isUpAction(mdUp1.action), '**UP** should parse as UP');
+
+  const mdUp2 = parseSignal('🟢 **UP** 1M');
+  assert(mdUp2 !== null && isUpAction(mdUp2.action), '🟢 **UP** 1M should parse as UP');
+
+  const mdUp3 = parseSignal('<b>CALL</b>');
+  assert(mdUp3 !== null && isUpAction(mdUp3.action), '<b>CALL</b> should parse as UP');
+
+  // Format 8: Timeframe First
+  const tfUp1 = parseSignal('1M UP');
+  assert(tfUp1 !== null && isUpAction(tfUp1.action), '1M UP should parse as UP');
+
+  const tfUp2 = parseSignal('1 MIN CALL');
+  assert(tfUp2 !== null && isUpAction(tfUp2.action), '1 MIN CALL should parse as UP');
+
+  // Format 9: Direction Label format
+  const dirLabel1 = parseSignal('DIRECTION: UP');
+  assert(dirLabel1 !== null && isUpAction(dirLabel1.action), 'DIRECTION: UP should parse as UP');
+
+  const dirLabel2 = parseSignal('SIGNAL: CALL');
+  assert(dirLabel2 !== null && isUpAction(dirLabel2.action), 'SIGNAL: CALL should parse as UP');
+
+  // Format 10: Warm-up / Standby / Get Ready triggers (All Variations)
+  const prep1 = parseSignal('Get ready');
+  assert(prep1 !== null && prep1.action === 'PREPARE');
+  assert.strictEqual(prep1.ticker, 'READY');
+
+  const prepUpper = parseSignal('GET READY');
+  assert(prepUpper !== null && prepUpper.action === 'PREPARE');
+  assert.strictEqual(prepUpper.ticker, 'READY');
+
+  const prepPlatform = parseSignal('Open your Platform');
+  assert(prepPlatform !== null && prepPlatform.action === 'PREPARE');
+  assert.strictEqual(prepPlatform.ticker, 'READY');
+
+  const prepOpenPlat2 = parseSignal('OPEN PLATFORM: EUR/USD');
+  assert(prepOpenPlat2 !== null && prepOpenPlat2.action === 'PREPARE');
+  assert.strictEqual(prepOpenPlat2.ticker, 'EUR/USD');
+
+  const prep2 = parseSignal('GET READY: NVDA');
+  assert(prep2 !== null && prep2.action === 'PREPARE');
+  assert.strictEqual(prep2.ticker, 'NVDA');
+
+  // Space-separated tickers without colons
+  const prepSpace1 = parseSignal('GET READY EUR/USD');
+  assert(prepSpace1 !== null && prepSpace1.action === 'PREPARE');
+  assert.strictEqual(prepSpace1.ticker, 'EUR/USD');
+
+  const prepSpace2 = parseSignal('GET READY USD CHF OTC');
+  assert(prepSpace2 !== null && prepSpace2.action === 'PREPARE');
+  assert.strictEqual(prepSpace2.ticker, 'USD CHF OTC');
+
+  const prepSpace3 = parseSignal('PREPARE USD/JPY');
+  assert(prepSpace3 !== null && prepSpace3.action === 'PREPARE');
+  assert.strictEqual(prepSpace3.ticker, 'USD/JPY');
+
+  const prepSpace4 = parseSignal('STANDBY GBP/USD');
+  assert(prepSpace4 !== null && prepSpace4.action === 'PREPARE');
+  assert.strictEqual(prepSpace4.ticker, 'GBP/USD');
+
+  const prepSpace5 = parseSignal('WARM UP: USD/CAD');
+  assert(prepSpace5 !== null && prepSpace5.action === 'PREPARE');
+  assert.strictEqual(prepSpace5.ticker, 'USD/CAD');
+
+  const prepWarmHyphen = parseSignal('WARM-UP');
+  assert(prepWarmHyphen !== null && prepWarmHyphen.action === 'PREPARE');
+  assert.strictEqual(prepWarmHyphen.ticker, 'READY');
+
+  // Contextual phrases without ticker
+  const prepNextSig = parseSignal('GET READY FOR NEXT SIGNAL');
+  assert(prepNextSig !== null && prepNextSig.action === 'PREPARE');
+  assert.strictEqual(prepNextSig.ticker, 'READY');
+
+  const prepNextTrade = parseSignal('PREPARE FOR NEXT TRADE');
+  assert(prepNextTrade !== null && prepNextTrade.action === 'PREPARE');
+  assert.strictEqual(prepNextTrade.ticker, 'READY');
+
+  const prepGuys = parseSignal('GET READY GUYS');
+  assert(prepGuys !== null && prepGuys.action === 'PREPARE');
+  assert.strictEqual(prepGuys.ticker, 'READY');
+
+  const prepAll = parseSignal('GET READY ALL');
+  assert(prepAll !== null && prepAll.action === 'PREPARE');
+  assert.strictEqual(prepAll.ticker, 'READY');
+
+  const prepBeReady = parseSignal('BE READY');
+  assert(prepBeReady !== null && prepBeReady.action === 'PREPARE');
+  assert.strictEqual(prepBeReady.ticker, 'READY');
+
+  const prepAreYou = parseSignal('ARE YOU READY');
+  assert(prepAreYou !== null && prepAreYou.action === 'PREPARE');
+  assert.strictEqual(prepAreYou.ticker, 'READY');
+
+  const prepReadyTrade = parseSignal('READY TO TRADE');
+  assert(prepReadyTrade !== null && prepReadyTrade.action === 'PREPARE');
+  assert.strictEqual(prepReadyTrade.ticker, 'READY');
+
+  // Ticker first with Get Ready / Prepare suffix
+  const tickPrep1 = parseSignal('EUR/USD GET READY');
+  assert(tickPrep1 !== null && tickPrep1.action === 'PREPARE');
+  assert.strictEqual(tickPrep1.ticker, 'EUR/USD');
+
+  const tickPrep2 = parseSignal('USD CHF OTC PREPARE');
+  assert(tickPrep2 !== null && tickPrep2.action === 'PREPARE');
+  assert.strictEqual(tickPrep2.ticker, 'USD CHF OTC');
+
+  const tickPrep3 = parseSignal('USD/JPY STANDBY');
+  assert(tickPrep3 !== null && tickPrep3.action === 'PREPARE');
+  assert.strictEqual(tickPrep3.ticker, 'USD/JPY');
+
+  // Emojis with Get Ready (Hourglass, Bell, Megaphone, Lightning, Sparkles, Fire)
+  const prepEmoji1 = parseSignal('⚡ GET READY: EUR/USD ⚡');
+  assert(prepEmoji1 !== null && prepEmoji1.action === 'PREPARE');
+  assert.strictEqual(prepEmoji1.ticker, 'EUR/USD');
+
+  const prepEmoji2 = parseSignal('⏳ GET READY ⏳');
+  assert(prepEmoji2 !== null && prepEmoji2.action === 'PREPARE');
+  assert.strictEqual(prepEmoji2.ticker, 'READY');
+
+  const prepEmoji3 = parseSignal('🔔 GET READY 🔔');
+  assert(prepEmoji3 !== null && prepEmoji3.action === 'PREPARE');
+  assert.strictEqual(prepEmoji3.ticker, 'READY');
+
+  const prepEmoji4 = parseSignal('📢 PREPARE: USD CHF OTC 📢');
+  assert(prepEmoji4 !== null && prepEmoji4.action === 'PREPARE');
+  assert.strictEqual(prepEmoji4.ticker, 'USD CHF OTC');
+
+  // Multi-line Get Ready Formats
+  const multiPrep1 = parseSignal('GET READY\nPAIR: EUR/USD OTC\n1 MIN');
+  assert(multiPrep1 !== null && multiPrep1.action === 'PREPARE');
+  assert.strictEqual(multiPrep1.ticker, 'EUR/USD OTC');
+
+  const multiPrep2 = parseSignal('⚡ PREPARE ⚡\nASSET: USD/CHF OTC\nTIME: 1 MINUTE');
+  assert(multiPrep2 !== null && multiPrep2.action === 'PREPARE');
+  assert.strictEqual(multiPrep2.ticker, 'USD/CHF OTC');
+
+  const multiPrep3 = parseSignal('GET READY\nUSD/JPY');
+  assert(multiPrep3 !== null && multiPrep3.action === 'PREPARE');
+  assert.strictEqual(multiPrep3.ticker, 'USD/JPY');
+
+  // Standalone Raw Tickers (Parsed as PREPARE)
+  const prep3 = parseSignal('USD CHF OTC');
+  assert(prep3 !== null && prep3.action === 'PREPARE');
+  assert.strictEqual(prep3.ticker, 'USD CHF OTC');
+
+  const prep4 = parseSignal('USD MXN OTC');
+  assert(prep4 !== null && prep4.action === 'PREPARE');
+  assert.strictEqual(prep4.ticker, 'USD MXN OTC');
+
+  const prep5 = parseSignal('USD BRL OTC');
+  assert(prep5 !== null && prep5.action === 'PREPARE');
+  assert.strictEqual(prep5.ticker, 'USD BRL OTC');
+
+  const prep6 = parseSignal('NZD CAD OTC');
+  assert(prep6 !== null && prep6.action === 'PREPARE');
+  assert.strictEqual(prep6.ticker, 'NZD CAD OTC');
+
+  // Format 11: Balance Check trigger
+  const bal1 = parseSignal('BALANCE');
+  assert(bal1 !== null && bal1.action === 'BALANCE');
+
+  const bal2 = parseSignal('CHECK BALANCE');
+  assert(bal2 !== null && bal2.action === 'BALANCE');
+
+  // Format 12: Strict Rejections for Noise, Chat, Celebrations & Expirations
+  const rej1 = parseSignal('Hey team, should we buy some AAPL today?');
+  assert.strictEqual(rej1, null, 'Casual chat must be dropped');
+
+  const rej2 = parseSignal('JOIN VIP CHANNEL NOW FOR 50% OFF');
+  assert.strictEqual(rej2, null, 'Spam messages must be dropped');
+
+  const rej3 = parseSignal('');
+  assert.strictEqual(rej3, null, 'Empty string must return null');
+
+  const rej4 = parseSignal('Profit 🚀🚀');
+  assert.strictEqual(rej4, null, 'Profit celebration must be dropped');
+
+  const rej5 = parseSignal('Profit 🚀');
+  assert.strictEqual(rej5, null, 'Profit rocket emoji must be dropped');
+
+  const rej6 = parseSignal('Good session... Let\'s continue later 🚀🚀');
+  assert.strictEqual(rej6, null, 'Session end notice must be dropped');
+
+  const rej7 = parseSignal('Change');
+  assert.strictEqual(rej7, null, 'Change text must be dropped');
+
+  const rej8 = parseSignal('2 minutes');
+  assert.strictEqual(rej8, null, 'Standalone minutes must be dropped');
+
+  const rej9 = parseSignal('Let\'s start in 90 minutes');
+  assert.strictEqual(rej9, null, 'Session countdown must be dropped');
+
+  console.log('✔ Test 1 Passed: Parser correctly handles all UP, DOWN, CALL, PUT, multi-line, markdown, standby formats, and VIP channel filters.\n');
+
+  // ----------------------------------------------------
+  // TEST 2: Queue Concurrency = 1 Serialization
+  // ----------------------------------------------------
+  console.log('▶ Test 2: Sequential Queue Concurrency Verification...');
+
+  let activeCount = 0;
+  let maxConcurrent = 0;
+  const executionOrder: number[] = [];
+
+  const mockRunner = async (signal: TradeSignal) => {
+    activeCount++;
+    if (activeCount > maxConcurrent) maxConcurrent = activeCount;
+
+    // Simulate work taking 30ms
+    await new Promise((r) => setTimeout(r, 30));
+    executionOrder.push(signal.price || 0);
+
+    activeCount--;
+    return {
+      success: true,
+      signal,
+      durationMs: 30,
+    };
+  };
+
+  const tasks: AutomationTask[] = [1, 2, 3, 4, 5].map((i) => ({
+    id: `task-${i}`,
+    signal: {
+      action: 'UP',
+      ticker: `SYM${i}`,
+      price: i,
+      rawText: `UP SYM${i} @ ${i}`,
+      timestamp: new Date(),
+    },
+    receivedAt: new Date(),
+  }));
+
+  // Fire 5 tasks concurrently
+  const promises = tasks.map((t) => automationQueue.enqueue(t, mockRunner));
+  await Promise.all(promises);
+
+  assert.strictEqual(maxConcurrent, 1, 'Max concurrent executions must never exceed 1');
+  assert.deepStrictEqual(executionOrder, [1, 2, 3, 4, 5], 'Tasks must execute in strict FIFO sequence');
+
+  console.log('✔ Test 2 Passed: Queue strictly serializes execution with concurrency = 1.\n');
+
+  // ----------------------------------------------------
+  // TEST 3: Quotex UP & DOWN HTML Button Click Verification
+  // ----------------------------------------------------
+  console.log('▶ Test 3: Quotex UP & DOWN HTML Button Click Verification with Exact User HTML...');
+
+  // Launch isolated headless browser to verify the exact Quotex HTML buttons
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  // Load the exact Quotex button HTML provided by the user
+  const quotexHtmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head><title>Quotex Simulation</title></head>
+      <body>
+        <div class="trading-panel">
+          <!-- Exact UP Button HTML provided by user -->
+          <button type="button" class="KtjVk JQZcs _5qIw LzVPu">
+            <span class="oQ4Z4">Up</span>
+            <svg class="icon-arrow-up-circle oDDMG"><use xlink:href="/profile/images/spritemap.svg#icon-arrow-up-circle"></use></svg>
+            <span class="SGRs3"><svg class="icon-button-loader"><use xlink:href="/profile/images/spritemap.svg#icon-button-loader"></use></svg></span>
+          </button>
+
+          <!-- Exact DOWN Button HTML provided by user -->
+          <button type="button" class="KtjVk twQq3 _5qIw LzVPu">
+            <span class="oQ4Z4">Down</span>
+            <svg class="icon-arrow-down-circle oDDMG"><use xlink:href="/profile/images/spritemap.svg#icon-arrow-down-circle"></use></svg>
+            <span class="SGRs3"><svg class="icon-button-loader"><use xlink:href="/profile/images/spritemap.svg#icon-button-loader"></use></svg></span>
+          </button>
+        </div>
+        <script>
+          window.lastClicked = null;
+          document.querySelector('.JQZcs').addEventListener('click', () => { window.lastClicked = 'UP'; });
+          document.querySelector('.twQq3').addEventListener('click', () => { window.lastClicked = 'DOWN'; });
+        </script>
+      </body>
+    </html>
+  `;
+
+  await page.setContent(quotexHtmlContent);
+
+  // Test UP click
+  const upClickResult = await clickTradeButton(page, 'UP');
+  assert.strictEqual(upClickResult.success, true, 'clickTradeButton for UP must succeed');
+  const clickedUp = await page.evaluate(() => (window as any).lastClicked);
+  assert.strictEqual(clickedUp, 'UP', 'UP button event listener must be triggered');
+  console.log(`  ✔ Verified UP click: Selector used "${upClickResult.selectorUsed}"`);
+
+  // Test DOWN click
+  const downClickResult = await clickTradeButton(page, 'DOWN');
+  assert.strictEqual(downClickResult.success, true, 'clickTradeButton for DOWN must succeed');
+  const clickedDown = await page.evaluate(() => (window as any).lastClicked);
+  assert.strictEqual(clickedDown, 'DOWN', 'DOWN button event listener must be triggered');
+  console.log(`  ✔ Verified DOWN click: Selector used "${downClickResult.selectorUsed}"`);
+
+  await browser.close();
+  console.log('✔ Test 3 Passed: Successfully targeted and triggered clicks on user\'s exact Quotex UP & DOWN HTML buttons.\n');
+
+  // ----------------------------------------------------
+  // TEST 4: Market Functions (No-Cache Behavior)
+  // ----------------------------------------------------
+  console.log('▶ Test 4: Market Switch Behavior (Always Switch, No Cache)...');
+
+  // getActiveMarket always returns null — no caching
+  setActiveMarket(null);
+  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should always be null');
+
+  setActiveMarket('USD CHF OTC');
+  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should still be null — no caching');
+
+  setActiveMarket('EUR USD');
+  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should still be null — no caching');
+
+  console.log('✔ Test 4 Passed: Market caching removed — every signal triggers a fresh market switch.\n');
+
+  console.log('========================================');
+  console.log('  🎉 All Test Suites Passed 100%!       ');
+  console.log('========================================\n');
+}
+
+runTestSuite().catch((err) => {
+  console.error('Test Suite Failed:', err);
+  process.exit(1);
+});
+

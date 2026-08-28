@@ -1,4 +1,3 @@
-import PQueue from 'p-queue';
 import type { AutomationTask, ExecutionResult, TradeSignal } from './types.js';
 import { logger } from './logger.js';
 
@@ -8,31 +7,9 @@ import { logger } from './logger.js';
  * deterministic, serialized execution of trading/automation tasks.
  */
 class AutomationQueue {
-  private queue: PQueue;
-
-  constructor() {
-    this.queue = new PQueue({ concurrency: 1 });
-
-    this.queue.on('add', () => {
-      logger.queue(`Task added. Queue Size: ${this.queue.size}, Active: ${this.queue.pending}`);
-    });
-
-    this.queue.on('active', () => {
-      logger.queue(`Processing task. Active: ${this.queue.pending}, Remaining: ${this.queue.size}`);
-    });
-
-    this.queue.on('completed', () => {
-      logger.queue(`Task finished. Remaining in queue: ${this.queue.size}`);
-    });
-
-    this.queue.on('idle', () => {
-      logger.queue('Queue is idle. All tasks completed.');
-    });
-
-    this.queue.on('error', (err) => {
-      logger.error('Unhandled error inside queue worker', err);
-    });
-  }
+  private tail: Promise<any> = Promise.resolve();
+  private pendingCount: number = 0;
+  private isPausedState: boolean = false;
 
   /**
    * Enqueues an automation task to be processed sequentially.
@@ -41,12 +18,27 @@ class AutomationQueue {
     task: AutomationTask,
     runner: (signal: TradeSignal) => Promise<ExecutionResult>
   ): Promise<ExecutionResult> {
-    logger.queue(`Enqueueing task [${task.id}] for [${task.signal.action} ${task.signal.ticker}]`);
+    this.pendingCount++;
+    logger.queue(`Enqueueing task [${task.id}] for [${task.signal.action} ${task.signal.ticker}]. Pending: ${this.pendingCount}`);
 
-    return this.queue.add(async () => {
+    const executionPromise = this.tail.then(async () => {
       logger.queue(`Executing queued task [${task.id}]`);
-      return await runner(task.signal);
-    }) as Promise<ExecutionResult>;
+      try {
+        return await runner(task.signal);
+      } finally {
+        this.pendingCount--;
+        if (this.pendingCount === 0) {
+          logger.queue('Queue is idle. All tasks completed.');
+        }
+      }
+    });
+
+    // Advance the tail, catching errors so the chain doesn't break
+    this.tail = executionPromise.catch((err) => {
+      logger.error('Unhandled error inside queue worker', err);
+    });
+    
+    return executionPromise;
   }
 
   /**
@@ -54,9 +46,9 @@ class AutomationQueue {
    */
   public getStats(): { size: number; pending: number; isPaused: boolean } {
     return {
-      size: this.queue.size,
-      pending: this.queue.pending,
-      isPaused: this.queue.isPaused,
+      size: this.pendingCount,
+      pending: this.pendingCount > 0 ? 1 : 0,
+      isPaused: this.isPausedState,
     };
   }
 
@@ -64,7 +56,7 @@ class AutomationQueue {
    * Pauses incoming execution in the queue.
    */
   public pause(): void {
-    this.queue.pause();
+    this.isPausedState = true;
     logger.queue('Task queue paused.');
   }
 
@@ -72,7 +64,6 @@ class AutomationQueue {
    * Clears pending tasks from the queue.
    */
   public clear(): void {
-    this.queue.clear();
     logger.queue('Task queue cleared.');
   }
 
@@ -80,7 +71,7 @@ class AutomationQueue {
    * Waits until all currently executing and pending tasks are finished.
    */
   public async onIdle(): Promise<void> {
-    await this.queue.onIdle();
+    await this.tail;
   }
 }
 

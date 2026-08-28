@@ -139,6 +139,14 @@ function printIncomingMessage(msgDetails: {
       console.log(
         `║ Status:       ⚡ PRE-WARM / STANDBY: ${msgDetails.parsedSignal.ticker.padEnd(31)}║`
       );
+    } else if (msgDetails.parsedSignal.action === 'SET_DURATION') {
+      console.log(
+        `║ Status:       ⏱️ TIME UPDATE: ${msgDetails.parsedSignal.durationMinutes} minutes`.padEnd(61) + '║'
+      );
+    } else if (msgDetails.parsedSignal.action === 'ABORT') {
+      console.log(
+        `║ Status:       🛑 ABORT/CANCEL PREVIOUS SIGNAL                ║`
+      );
     } else if (msgDetails.parsedSignal.action === 'UP' || msgDetails.parsedSignal.action === 'CALL' || msgDetails.parsedSignal.action === 'BUY') {
       console.log(
         `║ Status:       🟢 VALID UP SIGNAL: ${msgDetails.parsedSignal.ticker.padEnd(34)}║`
@@ -241,19 +249,16 @@ async function inspectTargetChannel(): Promise<void> {
 }
 
 
+let lastProcessedMessageId = 0;
+
 /**
- * Handles incoming NewMessage and EditedMessage events from Telegram MTProto.
+ * Common logic to parse and execute a message from the VIP channel
  */
-async function handleNewMessage(event: NewMessageEvent): Promise<void> {
-  const message = event.message;
-  if (!message) return;
+function processMessage(message: any): void {
+  if (!message || message.id <= lastProcessedMessageId) return;
 
-  const incomingPeerId = extractPeerChannelId(message.peerId || message);
-
-  // STRICT FILTER: Drop immediately if channel ID does not match target VIP_CHANNEL_ID
-  if (incomingPeerId === null || incomingPeerId !== config.vipChannelIdBigInt) {
-    return;
-  }
+  // Only update last processed ID if it's strictly greater
+  lastProcessedMessageId = message.id;
 
   const rawText = message.message || '';
   const senderName = message.postAuthor || (message.sender ? (message.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
@@ -328,6 +333,68 @@ async function handleNewMessage(event: NewMessageEvent): Promise<void> {
 }
 
 /**
+ * Handles incoming NewMessage and EditedMessage events from Telegram MTProto.
+ */
+async function handleNewMessage(event: NewMessageEvent): Promise<void> {
+  const message = event.message;
+  if (!message) return;
+
+  const incomingPeerId = extractPeerChannelId(message.peerId || message);
+
+  // STRICT FILTER: Drop immediately if channel ID does not match target VIP_CHANNEL_ID
+  if (incomingPeerId === null || incomingPeerId !== config.vipChannelIdBigInt) {
+    return;
+  }
+
+  processMessage(message);
+}
+
+/**
+ * Actively polls the VIP channel every 250ms (Hyper-Fast) to bypass Telegram push update limitations for large channels.
+ */
+function startActivePolling(): void {
+  logger.info(`Starting HYPER-FAST active polling (250ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
+  
+  let isPolling = false;
+
+  async function poll() {
+    if (isShuttingDown || !client.connected) return;
+    if (isPolling) return; // Prevent overlapping polls if network is slow
+    
+    isPolling = true;
+    let nextDelay = 250;
+
+    try {
+      const messages = await client.getMessages(config.vipChannelIdRaw, { limit: 1 });
+      if (messages && messages.length > 0) {
+        const latestMessage = messages[0];
+        if (latestMessage) {
+          if (lastProcessedMessageId === 0) {
+            lastProcessedMessageId = latestMessage.id;
+          } else {
+            // processMessage handles the ID duplicate check
+            processMessage(latestMessage);
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err?.errorMessage === 'FLOOD_WAIT' || err?.message?.includes('FLOOD')) {
+        const waitTime = err.seconds || 5;
+        logger.warn(`⚠️ Telegram rate limit (FloodWait) hit during polling. Backing off for ${waitTime} seconds...`);
+        nextDelay = waitTime * 1000;
+      }
+      // Ignore minor network errors
+    } finally {
+      isPolling = false;
+      setTimeout(poll, nextDelay);
+    }
+  }
+
+  // Kick off the recursive poll
+  poll();
+}
+
+/**
  * Graceful Teardown Lifecycle Handler
  */
 let isShuttingDown = false;
@@ -395,9 +462,13 @@ async function bootstrap(): Promise<void> {
     await inspectTargetChannel();
 
 
-    // Attach event handler (GramJS NewMessage handles both new channel messages and edited posts)
+    // Register the core new message handler
+    // GramJS NewMessage handles both new channel messages and edited posts
     client.addEventHandler(handleNewMessage, new NewMessage({}));
     logger.info(`Telegram NewMessage listener attached for VIP Channel [${config.vipChannelIdRaw}]. Listening for signals...`);
+
+    // Start the active polling fallback
+    startActivePolling();
 
     // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
     setInterval(async () => {

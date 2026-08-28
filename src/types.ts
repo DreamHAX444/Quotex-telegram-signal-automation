@@ -2,7 +2,7 @@
  * Centralized Type Definitions for Telegram Automation System
  */
 
-export type ActionType = 'UP' | 'DOWN' | 'CALL' | 'PUT' | 'BUY' | 'SELL' | 'PREPARE' | 'BALANCE' | 'SWITCH_LIVE' | 'SWITCH_DEMO';
+export type ActionType = 'UP' | 'DOWN' | 'CALL' | 'PUT' | 'BUY' | 'SELL' | 'PREPARE' | 'BALANCE' | 'SWITCH_LIVE' | 'SWITCH_DEMO' | 'SET_DURATION' | 'ABORT';
 
 export function isUpAction(action?: ActionType | string | null): boolean {
   if (!action) return false;

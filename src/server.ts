@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import serveStatic from 'serve-static';
 import { logger } from './logger.js';
 
 import { balanceManager } from './balance.js';
@@ -22,16 +23,7 @@ export function startDashboardServer(port = 3000) {
     const parsedUrl = new URL(req.url || '/', `http://localhost:${port}`);
     const pathname = parsedUrl.pathname;
 
-    if (pathname === '/') {
-      const dashboardPath = path.join(process.cwd(), 'dashboard.html');
-      if (fs.existsSync(dashboardPath)) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(fs.readFileSync(dashboardPath));
-      } else {
-        res.writeHead(404);
-        res.end('Dashboard HTML not found.');
-      }
-    } else if (pathname === '/logs' || pathname === '/api/logs') {
+    if (pathname === '/logs' || pathname === '/api/logs') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(logger.getLogs()));
     } else if (pathname === '/api/balance' || pathname === '/balance') {
@@ -127,8 +119,12 @@ export function startDashboardServer(port = 3000) {
         res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
       }
     } else {
-      res.writeHead(404);
-      res.end();
+      // Serve static frontend files
+      const serve = serveStatic(path.join(process.cwd(), 'frontend', 'dist'), { index: ['index.html'] });
+      serve(req, res as any, () => {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+      });
     }
   });
 

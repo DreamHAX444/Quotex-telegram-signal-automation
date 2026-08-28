@@ -71,6 +71,9 @@ export function normalizeAction(rawAction?: string | null): ActionType {
   if (['BALANCE', 'CHECK BALANCE', 'ACCOUNT BALANCE'].includes(upper)) {
     return 'BALANCE';
   }
+  if (['ABORT', 'CANCEL', 'CHANGE', 'STOP', 'IGNORE'].includes(upper)) {
+    return 'ABORT';
+  }
   return upper as ActionType;
 }
 
@@ -314,6 +317,38 @@ const SIGNAL_PATTERNS: Array<{
       rawText,
       timestamp: new Date(),
     }),
+  },
+  
+  // Pattern 0.5: ABORT / CANCEL / CHANGE TRIGGER
+  {
+    name: 'ABORT_TRIGGER',
+    regex: /^(?:ABORT|CANCEL|CHANGE|STOP|IGNORE)$/i,
+    extract: (_match, rawText) => ({
+      action: 'ABORT',
+      ticker: 'ACTIVE',
+      rawText,
+      timestamp: new Date(),
+    }),
+  },
+
+  // Pattern 0.6: STANDALONE DURATION TRIGGER
+  {
+    name: 'STANDALONE_DURATION',
+    regex: /^(?:CHANGE\s+(?:TIME|DURATION)\s+TO\s+)?(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)$/i,
+    extract: (match, rawText) => {
+      let durationMinutes = undefined;
+      if (match[1]) durationMinutes = parseInt(match[1], 10);
+      else if (match[2]) durationMinutes = parseInt(match[2], 10);
+      else if (match[3]) durationMinutes = parseInt(match[3], 10) * 60;
+      
+      return {
+        action: 'SET_DURATION',
+        ticker: 'ACTIVE',
+        durationMinutes,
+        rawText,
+        timestamp: new Date(),
+      };
+    },
   },
 
   // Pattern 1: WARM-UP / GET READY TRIGGER (e.g. "Get ready", "GET READY: EUR/USD", "GET READY EUR/USD", "PREPARE USD CHF OTC", "STANDBY")

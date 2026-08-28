@@ -105,6 +105,27 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
         });
 
         logger.browser('✅ Specific browser profile launched successfully.');
+        
+        // Enforce default account on startup
+        try {
+          const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+          if (fs.existsSync(settingsPath)) {
+            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            if (settings.defaultAccount) {
+              const startupPage = await globalContext.newPage();
+              await ensurePageOnTarget(startupPage);
+              const startupBalance = await balanceManager.extractAndRecordBalance(startupPage);
+              if (startupBalance && startupBalance.accountType && startupBalance.accountType !== settings.defaultAccount && startupBalance.accountType !== 'Unknown') {
+                 logger.browser(`🔄 Startup check: Enforcing default ${settings.defaultAccount} Account...`);
+                 await switchAccountType(startupPage, settings.defaultAccount as 'Live' | 'Demo');
+              }
+              await startupPage.close().catch(() => {});
+            }
+          }
+        } catch (startupErr) {
+          logger.warn('⚠️ Failed to enforce default account on browser startup', startupErr);
+        }
+
         break; // Success, exit retry loop
       } catch (err: any) {
         const errorMessage = err?.message || String(err);
@@ -362,27 +383,6 @@ async function handlePrepareTrigger(signal: TradeSignal, startTime: number): Pro
     // Read and log the current balance via the balance manager
     let balance = await balanceManager.extractAndRecordBalance(page);
     
-    // Enforce Default Account setting
-    try {
-      const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
-      let defaultAccount = 'Demo';
-      if (fs.existsSync(settingsPath)) {
-        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        if (settings.defaultAccount) defaultAccount = settings.defaultAccount;
-      }
-      
-      if (balance && balance.accountType && balance.accountType !== defaultAccount && balance.accountType !== 'Unknown') {
-        logger.browser(`⚠️ Account mismatch on PREPARE. Default is ${defaultAccount} but currently on ${balance.accountType}. Switching...`);
-        const switched = await switchAccountType(page, defaultAccount as 'Live' | 'Demo');
-        if (switched) {
-          // Re-extract balance after switching
-          balance = await balanceManager.extractAndRecordBalance(page);
-        }
-      }
-    } catch (err) {
-      logger.warn('Failed to enforce default account during PREPARE', err);
-    }
-
     const isGenericTicker =
       !signal.ticker ||
       ['ACTIVE', 'CURRENT', 'READY', 'STANDBY', 'ACCOUNT'].includes(signal.ticker.toUpperCase());
@@ -640,6 +640,25 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
       } else {
         logger.warn(`Could not find time input to set ${signal.durationMinutes}m`);
       }
+    }
+
+    if (signal.action === 'SET_DURATION') {
+      return {
+        success: true,
+        signal,
+        durationMs: Date.now() - startTime,
+        details: `Updated duration to ${signal.durationMinutes}m`,
+      };
+    }
+
+    if (signal.action === 'ABORT') {
+      logger.browser(`Abort signal received, ignoring previous preparations.`);
+      return {
+        success: true,
+        signal,
+        durationMs: Date.now() - startTime,
+        details: `Aborted/Ignored as requested`,
+      };
     }
 
     if (signal.price !== undefined) {

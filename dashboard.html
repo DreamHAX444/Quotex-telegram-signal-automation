@@ -3,171 +3,244 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cortex Automation - Live Trading Terminal</title>
+  <title>Cortex Automation - Terminal</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            background: '#09090B',
+            card: '#09090B',
+            foreground: '#FAFAFA',
+            muted: '#27272A',
+            'muted-foreground': '#A1A1AA',
+            border: '#27272A',
+            accent: '#10B981', // Crisp Emerald
+            'accent-foreground': '#052e16',
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0b0f19; color: #f1f5f9; }
-    .mono { font-family: 'JetBrains Mono', monospace; }
-    .log-container { scrollbar-width: thin; scrollbar-color: #334155 #0f172a; }
-    .log-container::-webkit-scrollbar { width: 6px; }
-    .log-container::-webkit-scrollbar-track { background: #0f172a; }
-    .log-container::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 10px; }
-    .glow-emerald { box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.3); }
-    .glow-cyan { box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.3); }
-    .glow-amber { box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.3); }
+    body {
+      background-color: #09090B;
+      color: #FAFAFA;
+    }
+    
+    .log-container {
+      scrollbar-width: thin;
+      scrollbar-color: #3F3F46 transparent;
+    }
+    .log-container::-webkit-scrollbar { width: 5px; height: 5px; }
+    .log-container::-webkit-scrollbar-track { background: transparent; }
+    .log-container::-webkit-scrollbar-thumb { background-color: #3F3F46; border-radius: 4px; }
+    .log-container::-webkit-scrollbar-thumb:hover { background-color: #52525B; }
+    
+    .glow-text {
+      text-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+    }
+    
+    *:focus-visible {
+      outline: 2px solid #10B981;
+      outline-offset: 2px;
+    }
+
+    #logs-container {
+      transform: translateZ(0);
+      will-change: transform, scroll-position;
+    }
+
+    .balance-update {
+      animation: flash-green 1s ease-out;
+    }
+
+    @keyframes flash-green {
+      0% { color: #10B981; text-shadow: 0 0 30px rgba(16, 185, 129, 0.5); }
+      100% { color: #FAFAFA; text-shadow: 0 0 20px rgba(16, 185, 129, 0.15); }
+    }
+    
+    /* Toggle Switch Transition */
+    .toggle-active {
+      background-color: #09090B;
+      color: #FAFAFA;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+      border-color: #27272A;
+    }
+    .toggle-inactive {
+      color: #A1A1AA;
+      border-color: transparent;
+    }
+    .toggle-inactive:hover {
+      color: #FAFAFA;
+    }
   </style>
 </head>
-<body class="h-screen flex flex-col antialiased bg-[#090d16] text-slate-100 selection:bg-emerald-500 selection:text-white">
-  <!-- Top Navigation Bar -->
-  <header class="bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800/80 px-6 py-3.5 shadow-xl flex justify-between items-center z-20">
-    <div class="flex items-center space-x-3.5">
-      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-emerald-500/25">
-        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-        </svg>
+<body class="h-screen flex flex-col antialiased font-sans overflow-hidden selection:bg-accent/20 selection:text-accent">
+  
+  <!-- Header Minimal -->
+  <header class="flex-none flex items-center justify-between px-4 sm:px-6 h-14 border-b border-border bg-background/95 backdrop-blur z-20 shadow-sm">
+    <div class="flex items-center gap-3">
+      <div class="relative flex h-2 w-2">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
       </div>
-      <div>
-        <div class="flex items-center space-x-2">
-          <h1 class="text-base font-bold tracking-tight text-white leading-none">Cortex Automation</h1>
-          <span class="px-2 py-0.5 text-[10px] font-bold bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 uppercase tracking-wider">v2.0 PRO</span>
-        </div>
-        <p class="text-[11px] text-slate-400 font-medium tracking-wide mt-0.5">High-Speed Execution & Balance Engine</p>
-      </div>
+      <h1 class="text-[13px] font-semibold tracking-wide text-foreground">Cortex <span class="text-muted-foreground font-normal">/ Terminal</span></h1>
     </div>
     
-    <div class="flex items-center space-x-3">
-      <!-- Live Status Pill -->
-      <div class="flex items-center px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
-        <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse mr-2 shadow-[0_0_8px_rgba(52,211,153,0.8)]"></div>
-        <span class="text-xs font-semibold text-emerald-400 uppercase tracking-wider">System Live</span>
+    <div class="flex items-center gap-4 sm:gap-5 text-[10px] sm:text-[11px] font-mono text-muted-foreground">
+      <div id="header-system-mode" class="flex items-center gap-1.5 bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded-full border border-yellow-500/20 transition-all shadow-[0_0_10px_rgba(234,179,8,0.05)]">
+        <i data-lucide="radio" class="w-3 h-3"></i>
+        <span class="uppercase tracking-widest font-semibold hidden sm:inline" id="header-mode-text">Demo System</span>
+        <span class="uppercase tracking-widest font-semibold sm:hidden" id="header-mode-text-mobile">Demo</span>
+      </div>
+      <div class="flex items-center gap-1.5 sm:gap-2">
+        <i data-lucide="cpu" class="w-3.5 h-3.5"></i>
+        <span class="hidden sm:inline">Engine Active</span>
       </div>
     </div>
   </header>
 
-  <!-- Main Content Dashboard -->
-  <main class="flex-1 overflow-hidden p-6 max-w-7xl mx-auto w-full flex flex-col gap-5">
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 grid-rows-[auto_1fr] lg:grid-rows-1 min-h-0 overflow-hidden">
     
-    <!-- Top Metrics Row -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <!-- Left Sidebar: Stats & Controls -->
+    <aside class="col-span-1 lg:col-span-3 border-b lg:border-b-0 lg:border-r border-border bg-card p-4 sm:p-6 flex flex-col gap-6 overflow-y-auto z-10 custom-scrollbar">
       
-      <!-- Primary Balance Card -->
-      <div class="md:col-span-2 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 rounded-2xl border border-slate-800 p-5 shadow-xl flex flex-col justify-between relative overflow-hidden group">
-        <div class="absolute -right-10 -bottom-10 w-40 h-40 bg-emerald-500/5 rounded-full blur-2xl group-hover:bg-emerald-500/10 transition-all pointer-events-none"></div>
-        
-        <div class="flex justify-between items-start">
-          <div class="flex items-center space-x-2.5">
-            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-              </svg>
-            </div>
-            <div>
-              <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Trading Account Balance</div>
-              <div id="account-badge" class="inline-flex items-center mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider bg-slate-800 text-slate-400 border border-slate-700">
-                Checking...
-              </div>
-            </div>
-          </div>
-
-          <!-- Refresh Balance Button -->
-          <button id="refresh-balance-btn" onclick="refreshBalance()" class="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg border border-slate-700 text-xs font-medium transition-all shadow-sm active:scale-95">
-            <svg id="refresh-icon" class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-            </svg>
-            <span id="refresh-text">Refresh</span>
+      <!-- Balance Section -->
+      <section class="flex flex-col gap-3">
+        <header class="flex items-center justify-between">
+          <h2 class="text-[10px] sm:text-[11px] uppercase tracking-widest text-muted-foreground font-semibold">Account Balance</h2>
+          <button id="refresh-balance-btn" onclick="refreshBalance()" class="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-md hover:bg-muted active:scale-95 flex items-center justify-center focus:outline-none" aria-label="Refresh Balance">
+            <i id="refresh-icon" data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
           </button>
-        </div>
-
-        <div class="mt-4 flex items-baseline justify-between flex-wrap gap-2">
-          <div>
-            <div id="balance-display" class="mono text-3xl sm:text-4xl font-bold tracking-tight text-emerald-400 drop-shadow-sm">
-              Loading...
-            </div>
-            <div id="balance-strategy" class="text-[11px] text-slate-500 mt-1 font-mono">
-              Strategy: Initializing...
-            </div>
-          </div>
-
-          <div class="text-right">
-            <div class="text-xs text-slate-400 font-medium">Last Synced</div>
-            <div id="balance-time" class="text-xs text-slate-300 font-mono mt-0.5">--:--:--</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Quick Platform & Status Card -->
-      <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 rounded-2xl border border-slate-800 p-5 shadow-xl flex flex-col justify-between">
-        <div>
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Engine Status</span>
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        </header>
+        
+        <div class="bg-background border border-border p-4 sm:p-5 rounded-xl shadow-sm relative overflow-hidden transition-all duration-300 hover:border-zinc-700">
+          <div class="absolute -right-6 -top-6 w-24 h-24 bg-accent/5 rounded-full blur-2xl pointer-events-none"></div>
+          
+          <div id="balance-display" class="font-mono text-2xl sm:text-3xl font-medium tracking-tight glow-text text-foreground transition-colors duration-500">
+            ---
           </div>
           
-          <div class="mt-3 space-y-2 text-xs">
-            <div class="flex justify-between py-1 border-b border-slate-800/60">
-              <span class="text-slate-400">Target Broker:</span>
-              <span class="font-medium text-slate-200 mono">Quotex (market-qx)</span>
-            </div>
-            <div class="flex justify-between py-1 border-b border-slate-800/60">
-              <span class="text-slate-400">Queue Concurrency:</span>
-              <span class="font-semibold text-cyan-400 mono">1 (Sequential FIFO)</span>
-            </div>
-            <div class="flex justify-between py-1">
-              <span class="text-slate-400">Browser Mode:</span>
-              <span class="font-medium text-emerald-400 mono">Warm Standby</span>
-            </div>
+          <div class="flex items-center gap-2 mt-3 sm:mt-4">
+            <span id="account-badge" class="px-2 py-0.5 text-[9px] sm:text-[10px] font-mono rounded bg-muted text-muted-foreground border border-border">
+              Checking...
+            </span>
+            <span id="refresh-text" class="text-[9px] sm:text-[10px] text-muted-foreground hidden">Syncing...</span>
           </div>
         </div>
 
-        <div class="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-[11px] text-slate-500">
-          <span>GramJS MTProto</span>
-          <span class="text-emerald-400 font-semibold">Active</span>
+        <div class="space-y-2 sm:space-y-3 mt-1 px-1">
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-muted-foreground">Strategy</span>
+            <span id="balance-strategy" class="font-mono text-foreground text-right truncate max-w-[120px] sm:max-w-[140px] text-[10px] sm:text-[11px] bg-muted/50 px-1.5 py-0.5 rounded border border-border/50">Init...</span>
+          </div>
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-muted-foreground">Last Sync</span>
+            <span id="balance-time" class="font-mono text-muted-foreground text-[10px] sm:text-[11px]">--:--:--</span>
+          </div>
         </div>
-      </div>
+      </section>
 
-    </div>
+      <!-- Account Switch Controls Section -->
+      <section class="flex flex-col gap-3 pt-2 border-t border-border/50">
+        <h2 class="text-[11px] uppercase tracking-widest text-muted-foreground font-semibold">Account Switching</h2>
+        
+        <div class="space-y-4 px-1">
+          <!-- Active Account Switch -->
+          <div class="flex flex-col gap-2">
+            <div class="flex justify-between items-center">
+              <span class="text-xs text-muted-foreground">Active Account</span>
+            </div>
+            <div class="flex items-center p-1 bg-muted/50 rounded-lg border border-border">
+              <button id="btn-active-demo" onclick="setActiveAccount('Demo')" class="flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border">
+                Demo
+              </button>
+              <button id="btn-active-live" onclick="setActiveAccount('Live')" class="flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border">
+                Live
+              </button>
+            </div>
+          </div>
+          
+          <!-- Default Account Switch -->
+          <div class="flex flex-col gap-2">
+            <div class="flex justify-between items-center">
+              <span class="text-xs text-muted-foreground">Startup Default</span>
+            </div>
+            <div class="flex items-center p-1 bg-muted/50 rounded-lg border border-border">
+              <button id="btn-default-demo" onclick="setDefaultAccount('Demo')" class="flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border">
+                Demo
+              </button>
+              <button id="btn-default-live" onclick="setDefaultAccount('Live')" class="flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border">
+                Live
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <!-- Logs Terminal Section -->
-    <div class="bg-slate-900/90 rounded-2xl border border-slate-800 shadow-2xl flex-1 flex flex-col overflow-hidden backdrop-blur-sm">
+      <!-- System Config Section -->
+      <section class="hidden sm:flex flex-col gap-3 pt-2 border-t border-border/50">
+        <h2 class="text-[11px] uppercase tracking-widest text-muted-foreground font-semibold">Configuration</h2>
+        <div class="space-y-2.5 px-1">
+          <div class="flex justify-between items-center text-xs group">
+            <span class="text-muted-foreground group-hover:text-foreground transition-colors">Broker Target</span>
+            <span class="font-mono text-[11px] text-foreground">Quotex (qx)</span>
+          </div>
+          <div class="flex justify-between items-center text-xs group">
+            <span class="text-muted-foreground group-hover:text-foreground transition-colors">Concurrency</span>
+            <span class="font-mono text-[11px] text-foreground">1 (FIFO)</span>
+          </div>
+        </div>
+      </section>
       
-      <!-- Terminal Header -->
-      <div class="bg-slate-950/80 px-4 py-3 flex items-center justify-between border-b border-slate-800/80">
-        <div class="flex items-center space-x-3">
-          <div class="flex items-center space-x-1.5">
-            <div class="w-3 h-3 rounded-full bg-rose-500/90"></div>
-            <div class="w-3 h-3 rounded-full bg-amber-500/90"></div>
-            <div class="w-3 h-3 rounded-full bg-emerald-500/90"></div>
-          </div>
-          <span class="text-xs font-mono font-medium text-slate-400">cortex-automation ~ logs</span>
-        </div>
+    </aside>
 
-        <div class="flex items-center space-x-3 text-xs">
-          <span id="log-count" class="text-slate-500 mono">0 logs</span>
-          <button onclick="clearLogsUI()" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded border border-slate-700/60 text-[11px] transition-colors">
+    <!-- Right Area: Logs -->
+    <section class="col-span-1 lg:col-span-9 flex flex-col bg-background relative min-h-0">
+      
+      <!-- Logs Toolbar -->
+      <div class="flex-none px-4 sm:px-6 h-10 sm:h-12 border-b border-border flex items-center justify-between bg-background/80 backdrop-blur-sm sticky top-0 z-10 shadow-sm">
+        <div class="flex items-center gap-2 text-[10px] sm:text-[11px] font-mono text-muted-foreground">
+          <i data-lucide="terminal-square" class="w-3.5 h-3.5"></i>
+          <span>~/cortex/execution.log</span>
+        </div>
+        <div class="flex items-center gap-3 sm:gap-4 text-[10px] sm:text-[11px] font-mono">
+          <span id="last-update" class="text-muted-foreground hidden sm:inline">Syncing...</span>
+          <span class="text-border hidden sm:inline">|</span>
+          <span id="log-count" class="text-muted-foreground">0 events</span>
+          <button onclick="clearLogsUI()" class="ml-1 px-2.5 py-1 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors duration-200 border border-transparent hover:border-border focus:outline-none">
             Clear
           </button>
         </div>
       </div>
-      
-      <!-- Logs List Container -->
-      <div id="logs-container" class="log-container flex-1 overflow-y-auto p-4 mono text-xs space-y-1 bg-[#090d16]/90">
-        <!-- Injected dynamically -->
-      </div>
 
-      <!-- Terminal Footer Bar -->
-      <div class="bg-slate-950/60 px-4 py-2 border-t border-slate-800/60 flex justify-between items-center text-[11px] text-slate-500">
-        <div class="flex items-center space-x-2">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          <span>Auto-scrolling stream</span>
+      <!-- Logs Output -->
+      <div id="logs-container" class="flex-1 overflow-y-auto p-3 sm:p-6 log-container font-mono text-[10px] sm:text-[11px] space-y-0.5 sm:space-y-1 relative">
+        <!-- Empty State -->
+        <div id="empty-logs-state" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground space-y-3 opacity-60">
+          <i data-lucide="activity" class="w-8 h-8 opacity-50"></i>
+          <p class="font-mono text-xs tracking-wider uppercase">Waiting for execution events...</p>
         </div>
-        <span id="last-update">Connecting...</span>
       </div>
-    </div>
+    </section>
+
   </main>
 
   <script>
+    lucide.createIcons();
+
     const logsContainer = document.getElementById('logs-container');
+    const emptyLogsState = document.getElementById('empty-logs-state');
     const balanceDisplay = document.getElementById('balance-display');
     const accountBadge = document.getElementById('account-badge');
     const balanceStrategy = document.getElementById('balance-strategy');
@@ -176,58 +249,136 @@
     const logCountDisplay = document.getElementById('log-count');
     const refreshBtn = document.getElementById('refresh-balance-btn');
     const refreshIcon = document.getElementById('refresh-icon');
-    const refreshText = document.getElementById('refresh-text');
     
+    // Header UI Elements
+    const headerSystemMode = document.getElementById('header-system-mode');
+    const headerModeText = document.getElementById('header-mode-text');
+    const headerModeTextMobile = document.getElementById('header-mode-text-mobile');
+
     let lastLogCount = 0;
     let autoScroll = true;
+    let lastBalanceVal = '';
+    const MAX_DOM_LOGS = 1000;
+
+    // Account Switch State
+    let activeAccountType = 'Demo';
+    let defaultAccountType = 'Demo';
+
+    function setActiveAccount(type) {
+      activeAccountType = type;
+      
+      // Update toggle buttons
+      const btnDemo = document.getElementById('btn-active-demo');
+      const btnLive = document.getElementById('btn-active-live');
+      
+      if (type === 'Demo') {
+        btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+        btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+        
+        // Update header badge
+        headerSystemMode.className = "flex items-center gap-1.5 bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded-full border border-yellow-500/20 transition-all shadow-[0_0_10px_rgba(234,179,8,0.05)]";
+        headerModeText.textContent = "Demo System";
+        headerModeTextMobile.textContent = "Demo";
+      } else {
+        btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+        btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+        
+        // Update header badge
+        headerSystemMode.className = "flex items-center gap-1.5 bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-full border border-emerald-500/20 transition-all shadow-[0_0_10px_rgba(16,185,129,0.05)]";
+        headerModeText.textContent = "Live System";
+        headerModeTextMobile.textContent = "Live";
+      }
+
+      // API call to switch account backend
+      fetch('/api/switch-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activeType: type })
+      }).catch(() => console.log('Mocked account switch to:', type));
+      
+      // Refresh balance after switch
+      refreshBalance();
+    }
+
+    function setDefaultAccount(type) {
+      defaultAccountType = type;
+      
+      // Update toggle buttons
+      const btnDemo = document.getElementById('btn-default-demo');
+      const btnLive = document.getElementById('btn-default-live');
+      
+      if (type === 'Demo') {
+        btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+        btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+      } else {
+        btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+        btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+      }
+
+      // API call to save default account settings
+      fetch('/api/settings/default-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultType: type })
+      }).catch(() => console.log('Mocked save default account to:', type));
+    }
 
     function getLevelColor(level) {
       switch(level) {
-        case 'INFO': return 'text-cyan-400';
-        case 'WARN': return 'text-amber-400';
-        case 'ERROR': return 'text-rose-400 font-semibold';
-        case 'BROWSER': return 'text-fuchsia-400';
-        case 'TELEGRAM': return 'text-blue-400';
-        case 'QUEUE': return 'text-emerald-400';
-        default: return 'text-slate-400';
+        case 'INFO': return 'text-zinc-300';
+        case 'WARN': return 'text-amber-400/90';
+        case 'ERROR': return 'text-rose-400/90';
+        case 'BROWSER': return 'text-fuchsia-400/90';
+        case 'TELEGRAM': return 'text-blue-400/90';
+        case 'QUEUE': return 'text-emerald-400/90';
+        default: return 'text-zinc-400';
       }
     }
     
-    function getLevelBadge(level) {
+    function getLevelIndicator(level) {
+      let colorClass = 'border-zinc-700';
       switch(level) {
-        case 'INFO': return 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-        case 'WARN': return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-        case 'ERROR': return 'bg-rose-500/10 text-rose-400 border-rose-500/20';
-        case 'BROWSER': return 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20';
-        case 'TELEGRAM': return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-        case 'QUEUE': return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-        default: return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+        case 'INFO': colorClass = 'border-zinc-500'; break;
+        case 'WARN': colorClass = 'border-amber-500'; break;
+        case 'ERROR': colorClass = 'border-rose-500'; break;
+        case 'BROWSER': colorClass = 'border-fuchsia-500'; break;
+        case 'TELEGRAM': colorClass = 'border-blue-500'; break;
+        case 'QUEUE': colorClass = 'border-emerald-500'; break;
       }
+      return colorClass;
     }
 
     function updateBalanceUI(balance) {
       if (!balance) {
-        balanceDisplay.textContent = 'Awaiting Sync';
-        accountBadge.textContent = 'OFFLINE / UNLOADED';
-        accountBadge.className = 'inline-flex items-center mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider bg-slate-800 text-slate-400 border border-slate-700';
+        balanceDisplay.textContent = '---';
+        accountBadge.textContent = 'OFFLINE';
+        accountBadge.className = 'px-2 py-0.5 text-[10px] font-mono rounded bg-muted text-muted-foreground border border-border';
         return;
       }
 
-      balanceDisplay.textContent = balance.formattedBalance || `${balance.currency}${balance.numericValue}`;
+      const newVal = balance.formattedBalance || `${balance.currency}${balance.numericValue}`;
+      
+      if (lastBalanceVal !== newVal && lastBalanceVal !== '') {
+        balanceDisplay.classList.remove('balance-update');
+        void balanceDisplay.offsetWidth; // trigger reflow
+        balanceDisplay.classList.add('balance-update');
+      }
+      balanceDisplay.textContent = newVal;
+      lastBalanceVal = newVal;
       
       if (balance.accountType === 'Live') {
-        accountBadge.textContent = '🟢 LIVE ACCOUNT';
-        accountBadge.className = 'inline-flex items-center mt-0.5 px-2.5 py-0.5 text-[10px] font-extrabold rounded-full uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 glow-emerald';
+        accountBadge.textContent = 'LIVE';
+        accountBadge.className = 'px-2 py-0.5 text-[10px] font-mono rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20';
       } else if (balance.accountType === 'Demo') {
-        accountBadge.textContent = '🟡 DEMO ACCOUNT';
-        accountBadge.className = 'inline-flex items-center mt-0.5 px-2.5 py-0.5 text-[10px] font-extrabold rounded-full uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30 glow-amber';
+        accountBadge.textContent = 'DEMO';
+        accountBadge.className = 'px-2 py-0.5 text-[10px] font-mono rounded bg-amber-500/10 text-amber-500 border border-amber-500/20';
       } else {
-        accountBadge.textContent = '⚪ ACCOUNT ACTIVE';
-        accountBadge.className = 'inline-flex items-center mt-0.5 px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider bg-slate-800 text-cyan-400 border border-slate-700';
+        accountBadge.textContent = 'ACTIVE';
+        accountBadge.className = 'px-2 py-0.5 text-[10px] font-mono rounded bg-blue-500/10 text-blue-400 border border-blue-500/20';
       }
 
-      balanceStrategy.textContent = `Strategy: ${balance.source || 'Automated Extractor'}`;
-      balanceTime.textContent = balance.updatedAt ? new Date(balance.updatedAt).toLocaleTimeString() : new Date().toLocaleTimeString();
+      balanceStrategy.textContent = balance.source || 'Auto Extractor';
+      balanceTime.textContent = balance.updatedAt ? new Date(balance.updatedAt).toLocaleTimeString([], {hour12: false}) : new Date().toLocaleTimeString([], {hour12: false});
     }
 
     async function fetchBalance() {
@@ -239,14 +390,11 @@
             updateBalanceUI(data.balance);
           }
         }
-      } catch (err) {
-        console.warn('Balance poll error:', err);
-      }
+      } catch (err) {}
     }
 
     async function refreshBalance() {
       refreshIcon.classList.add('animate-spin');
-      refreshText.textContent = 'Syncing...';
       refreshBtn.disabled = true;
 
       try {
@@ -256,11 +404,9 @@
           updateBalanceUI(data.balance);
         }
       } catch (err) {
-        console.error('Refresh error:', err);
       } finally {
         setTimeout(() => {
           refreshIcon.classList.remove('animate-spin');
-          refreshText.textContent = 'Refresh';
           refreshBtn.disabled = false;
         }, 600);
       }
@@ -271,57 +417,105 @@
         const response = await fetch('/logs');
         const logs = await response.json();
         
-        lastUpdateDisplay.textContent = 'Sync: ' + new Date().toLocaleTimeString();
-        logCountDisplay.textContent = `${logs.length} logs`;
+        lastUpdateDisplay.textContent = new Date().toLocaleTimeString([], {hour12: false});
+        logCountDisplay.textContent = `${logs.length} events`;
         
+        if (logs.length < lastLogCount) {
+          clearLogsUI();
+        }
+
         if (logs.length > lastLogCount) {
+          if (emptyLogsState) emptyLogsState.style.display = 'none';
+
           const newLogs = logs.slice(lastLogCount);
+          const fragment = document.createDocumentFragment();
+          
           newLogs.forEach(log => {
-            // Also check for balance log lines to immediately update UI
             if (log.message && (log.message.includes('Balance:') || log.message.includes('💰'))) {
               fetchBalance();
             }
 
             const div = document.createElement('div');
-            div.className = 'flex flex-col sm:flex-row hover:bg-slate-800/40 rounded py-1 px-2 transition-colors border-l-2 border-transparent hover:border-slate-700';
+            div.className = `flex items-start gap-3 sm:gap-4 hover:bg-muted/40 py-1.5 px-2 sm:px-3 rounded-md transition-colors group border-l-2 ${getLevelIndicator(log.level)}`;
             
             let messageHtml = log.message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            // Highlight market pairs
-            messageHtml = messageHtml.replace(/([A-Z]{3}\/[A-Z]{3}|\b[A-Z]{3}\s+[A-Z]{3}(?:\s+OTC)?\b)/g, '<span class="text-white font-bold bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/80">$1</span>');
+            messageHtml = messageHtml.replace(/([A-Z]{3}\/[A-Z]{3}|\b[A-Z]{3}\s+[A-Z]{3}(?:\s+OTC)?\b)/g, '<span class="text-zinc-200 font-medium px-1 rounded bg-zinc-800/80 border border-zinc-700/50">$1</span>');
             
             div.innerHTML = `
-              <div class="flex items-center sm:w-48 shrink-0 space-x-2">
-                <span class="text-slate-500 text-[11px]">${log.timestamp.split(' ')[1] || ''}</span>
-                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase ${getLevelBadge(log.level)}">${log.level}</span>
+              <div class="text-zinc-500/80 w-12 sm:w-16 shrink-0 group-hover:text-zinc-400 transition-colors select-none text-[9px] sm:text-[10px] pt-[1px]">
+                ${log.timestamp.split(' ')[1] || ''}
               </div>
-              <div class="text-slate-300 flex-1 ml-0 sm:ml-4 mt-0.5 sm:mt-0 break-words ${getLevelColor(log.level)}">${messageHtml}</div>
+              <div class="flex-1 break-words leading-relaxed tracking-wide ${getLevelColor(log.level)}">${messageHtml}</div>
             `;
-            logsContainer.appendChild(div);
+            fragment.appendChild(div);
           });
           
+          logsContainer.appendChild(fragment);
           lastLogCount = logs.length;
+          
+          while (logsContainer.children.length > MAX_DOM_LOGS + 1) { 
+             logsContainer.removeChild(logsContainer.firstElementChild);
+          }
+          
           if (autoScroll) {
             logsContainer.scrollTop = logsContainer.scrollHeight;
           }
         }
-      } catch (err) {
-        console.error('Failed to fetch logs:', err);
-      }
+      } catch (err) {}
     }
 
     function clearLogsUI() {
-      logsContainer.innerHTML = '';
+      const logs = logsContainer.querySelectorAll('.group');
+      logs.forEach(l => l.remove());
+      
+      if (emptyLogsState) emptyLogsState.style.display = 'flex';
       lastLogCount = 0;
-      logCountDisplay.textContent = '0 logs';
+      logCountDisplay.textContent = '0 events';
+    }
+
+    logsContainer.addEventListener('scroll', () => {
+      const isAtBottom = Math.abs(logsContainer.scrollHeight - logsContainer.scrollTop - logsContainer.clientHeight) <= 50;
+      autoScroll = isAtBottom;
+    });
+
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/settings');
+        if (response.ok) {
+          const settings = await response.json();
+          const defaultType = settings.defaultAccount || 'Demo';
+          
+          // Set UI for default account without triggering POST
+          defaultAccountType = defaultType;
+          const btnDemo = document.getElementById('btn-default-demo');
+          const btnLive = document.getElementById('btn-default-live');
+          
+          if (defaultType === 'Demo') {
+            btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+            btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+          } else {
+            btnLive.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-active border";
+            btnDemo.className = "flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all toggle-inactive border";
+          }
+
+          // Trigger active account switch on startup to sync the browser
+          setActiveAccount(defaultType);
+        } else {
+          setActiveAccount('Demo');
+        }
+      } catch (err) {
+        setActiveAccount('Demo');
+      }
     }
 
     // Initial load
+    loadSettings();
     fetchBalance();
     fetchLogs();
 
     // Periodic polling
     setInterval(fetchLogs, 1000);
-    setInterval(fetchBalance, 10000); // Check balance state every 10s
+    setInterval(fetchBalance, 10000);
   </script>
 </body>
 </html>

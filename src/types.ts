@@ -2,7 +2,7 @@
  * Centralized Type Definitions for Telegram Automation System
  */
 
-export type ActionType = 'UP' | 'DOWN' | 'CALL' | 'PUT' | 'BUY' | 'SELL' | 'PREPARE' | 'BALANCE';
+export type ActionType = 'UP' | 'DOWN' | 'CALL' | 'PUT' | 'BUY' | 'SELL' | 'PREPARE' | 'BALANCE' | 'SWITCH_LIVE' | 'SWITCH_DEMO';
 
 export function isUpAction(action?: ActionType | string | null): boolean {
   if (!action) return false;
@@ -70,15 +70,10 @@ export interface AppConfig {
   vipChannelIdBigInt: bigint;
   headless: boolean;
   browserTimeoutMs: number;
-  standbyTimeoutMs: number;
   targetUrl: string;
-  authStoragePath: string;
   screenshotsDir: string;
   chromeUserDataDir: string;
   chromeExecutablePath: string;
   chromeProfileName: string;
-  cdpPort: number;
-  cdpUrl: string;
   autoLaunchChrome: boolean;
-  browserChannel?: string | undefined;
 }

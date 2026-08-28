@@ -1,6 +1,7 @@
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import type { TradeSignal, ExecutionResult, AccountBalance, ActionType } from './types.js';
 import { isUpAction, isDownAction } from './types.js';
 import { config } from './config.js';
@@ -10,20 +11,17 @@ import { balanceManager } from './balance.js';
 
 let globalContext: BrowserContext | null = null;
 
-// getActiveMarket / setActiveMarket kept as no-ops for test compatibility
+let currentActiveMarket: string | null = null;
+
 export function getActiveMarket(): string | null {
-  return null;
+  return currentActiveMarket;
 }
 
-export function setActiveMarket(_market: string | null): void {
-  // no-op: we always switch market, never cache
+export function setActiveMarket(market: string | null): void {
+  currentActiveMarket = market;
 }
 
 function ensureDirectories(): void {
-  const authDir = path.dirname(config.authStoragePath);
-  if (!fs.existsSync(authDir)) {
-    fs.mkdirSync(authDir, { recursive: true });
-  }
   if (!fs.existsSync(config.screenshotsDir)) {
     fs.mkdirSync(config.screenshotsDir, { recursive: true });
   }
@@ -79,52 +77,71 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
     }
 
     logger.browser(`Launching specific Cortex Automation Profile: "${config.chromeProfileName}"...`);
-    try {
-      globalContext = await chromium.launchPersistentContext(config.chromeUserDataDir, {
-        executablePath: config.chromeExecutablePath,
-        headless: config.headless,
-        viewport: null, // Allow default window sizing
-        ignoreDefaultArgs: ['--enable-automation', '--no-sandbox'],
-        args: [
-          `--profile-directory=${config.chromeProfileName}`, // Target the specific profile
-          '--disable-blink-features=AutomationControlled', // CRITICAL: Cloudflare stealth bypass
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--test-type' // Suppresses security warning banners
-        ]
-      });
-      
-      // CRITICAL: Inject stealth script to hide Playwright from Cloudflare
-      await globalContext.addInitScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
-      
-      globalContext.setDefaultTimeout(config.browserTimeoutMs);
-      
-      globalContext.on('close', () => {
-        logger.browser('⚠️ Browser context closed externally. Resetting global state.');
-        globalContext = null;
-      });
+    let retryCount = 0;
+    while (retryCount < 2) {
+      try {
+        globalContext = await chromium.launchPersistentContext(config.chromeUserDataDir, {
+          executablePath: config.chromeExecutablePath,
+          headless: config.headless,
+          viewport: null, // Allow default window sizing
+          ignoreDefaultArgs: ['--enable-automation', '--no-sandbox'],
+          args: [
+            `--profile-directory=${config.chromeProfileName}`, // Target the specific profile
+            '--disable-blink-features=AutomationControlled', // CRITICAL: Cloudflare stealth bypass
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--test-type' // Suppresses security warning banners
+          ]
+        });
+        
+        // CRITICAL: Inject stealth script to hide Playwright from Cloudflare
+        await globalContext.addInitScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+        
+        globalContext.setDefaultTimeout(config.browserTimeoutMs);
+        
+        globalContext.on('close', () => {
+          logger.browser('⚠️ Browser context closed externally. Resetting global state.');
+          globalContext = null;
+        });
 
-      logger.browser('✅ Specific browser profile launched successfully.');
-    } catch (err: any) {
-      const errorMessage = err?.message || String(err);
-      if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('locked')) {
-        logger.error('===============================================================');
-        logger.error('🚨 CHROME AUTOMATION FAILED - BROWSER ALREADY RUNNING 🚨');
-        logger.error('===============================================================');
-        logger.error(`The bot is trying to automate your specific Chrome Profile: "${config.chromeProfileName}"`);
-        logger.error('But Chrome is currently open in the background! Playwright needs exclusive access.');
-        logger.error('');
-        logger.error('👉 HOW TO FIX:');
-        logger.error('1. Fully close ALL Google Chrome windows.');
-        logger.error('2. IMPORTANT: Check your system tray (bottom right corner, near the clock).');
-        logger.error('   Right-click the Chrome icon there and click "Exit".');
-        logger.error('3. If it still fails, run this in your terminal:  taskkill /IM chrome.exe /F');
-        logger.error('4. Then run `npm run dev` again.');
-        logger.error('===============================================================');
-        throw new Error('Chrome is already running in the background. Please close it fully via the system tray or taskkill.');
+        logger.browser('✅ Specific browser profile launched successfully.');
+        break; // Success, exit retry loop
+      } catch (err: any) {
+        const errorMessage = err?.message || String(err);
+        if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('locked')) {
+          retryCount++;
+          logger.error(`🚨 BROWSER PROFILE LOCKED. Attempting auto-cleanup (Attempt ${retryCount}/2)...`);
+          try {
+            // Forcefully terminate zombie Chrome processes
+            if (process.platform === 'win32') {
+              execSync('taskkill /IM chrome.exe /F', { stdio: 'ignore' });
+            } else {
+              execSync('pkill -f chrome', { stdio: 'ignore' });
+            }
+            logger.browser('✅ Zombie Chrome processes terminated.');
+            
+            // Delete the SingletonLock file
+            const lockPath = path.join(config.chromeUserDataDir, 'SingletonLock');
+            if (fs.existsSync(lockPath)) {
+              fs.unlinkSync(lockPath);
+              logger.browser('✅ SingletonLock file deleted.');
+            }
+            
+            // Wait a moment for OS cleanup before retrying
+            await new Promise(res => setTimeout(res, 2000));
+            continue; // Retry launch
+          } catch (cleanupErr) {
+            logger.error('❌ Auto-cleanup failed.', cleanupErr);
+          }
+          
+          if (retryCount >= 2) {
+             throw new Error('Chrome is locked and auto-cleanup failed. Please close it fully via the system tray.');
+          }
+        } else {
+          logger.error('Failed to launch persistent context', err);
+          throw err;
+        }
       }
-      logger.error('Failed to launch persistent context', err);
-      throw err;
     }
   }
 
@@ -158,20 +175,42 @@ export async function closeWarmBrowser(): Promise<void> {
 }
 
 /**
- * ALWAYS switches to the specified market — no caching, no "already active" skip.
- * Every time a signal includes a ticker, this runs the full switch sequence.
+ * Switches to the specified market. 
+ * Includes ultra-fast caching and DOM checks to skip the switch if already active.
  *
  * Flow:
- *   1. Click the asset/pair selector to open the market picker
- *   2. Clear and type the ticker into the search box
- *   3. Click the first matching result
- *   4. Close the picker via Escape
+ *   1. Fast-path cache check
+ *   2. Fast-path DOM check
+ *   3. Fallback: Open picker, search, and click
  */
 async function selectMarket(page: Page, rawTicker: string): Promise<void> {
   // Normalize: "USD CHF OTC" → "USD/CHF", "eur usd" → "EUR/USD"
   const searchName = normalizeTicker(rawTicker);
   if (!searchName) {
     logger.warn(`selectMarket called with empty ticker: "${rawTicker}"`);
+    return;
+  }
+
+  // 1. Memory Cache Check (Instant)
+  if (currentActiveMarket === searchName) {
+    logger.browser(`⚡ Market "${searchName}" is already active in memory cache. Skipping switch!`);
+    return;
+  }
+
+  // 2. DOM Check (Extremely fast, < 10ms)
+  const isAlreadyActiveDOM = await page.evaluate((search) => {
+    const el = document.querySelector('.current-asset, .assets-select, .trading-pair, .pair-name');
+    if (el && el.textContent) {
+      const textClean = el.textContent.toUpperCase().replace(/[\s\/\-_\(\)]/g, '');
+      const searchClean = search.toUpperCase().replace(/[\s\/\-_\(\)]/g, '');
+      return textClean.includes(searchClean);
+    }
+    return false;
+  }, searchName);
+
+  if (isAlreadyActiveDOM) {
+    logger.browser(`⚡ Market "${searchName}" is already active on screen. Skipping switch!`);
+    setActiveMarket(searchName); // Update cache
     return;
   }
 
@@ -276,6 +315,7 @@ async function selectMarket(page: Page, rawTicker: string): Promise<void> {
 
     if (clicked) {
       logger.browser(`✅ Market switched to ${searchName}`);
+      setActiveMarket(searchName);
     } else {
       logger.warn(`⚠️ Could not find "${searchName}" in search results — market may not have switched`);
     }
@@ -320,7 +360,28 @@ async function handlePrepareTrigger(signal: TradeSignal, startTime: number): Pro
     await page.bringToFront().catch(() => {});
 
     // Read and log the current balance via the balance manager
-    const balance = await balanceManager.extractAndRecordBalance(page);
+    let balance = await balanceManager.extractAndRecordBalance(page);
+    
+    // Enforce Default Account setting
+    try {
+      const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+      let defaultAccount = 'Demo';
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (settings.defaultAccount) defaultAccount = settings.defaultAccount;
+      }
+      
+      if (balance && balance.accountType && balance.accountType !== defaultAccount && balance.accountType !== 'Unknown') {
+        logger.browser(`⚠️ Account mismatch on PREPARE. Default is ${defaultAccount} but currently on ${balance.accountType}. Switching...`);
+        const switched = await switchAccountType(page, defaultAccount as 'Live' | 'Demo');
+        if (switched) {
+          // Re-extract balance after switching
+          balance = await balanceManager.extractAndRecordBalance(page);
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to enforce default account during PREPARE', err);
+    }
 
     const isGenericTicker =
       !signal.ticker ||
@@ -391,13 +452,32 @@ export async function clickTradeButton(
       }
     }
 
-    // Fallback: search every button for matching text content
+    // Step 4: Semantic and Color Fallbacks for Buttons
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
       const btnText = (btn.textContent || '').trim().toLowerCase();
-      if (btnText === targetWord.toLowerCase() || btnText.startsWith(targetWord.toLowerCase())) {
+      const style = window.getComputedStyle(btn);
+      const bg = style.backgroundColor;
+      
+      // Semantic text match
+      if (btnText === targetWord.toLowerCase() || 
+          btnText.startsWith(targetWord.toLowerCase()) || 
+          (targetWord === 'Up' && (btnText.includes('call') || btnText.includes('higher'))) ||
+          (targetWord === 'Down' && (btnText.includes('put') || btnText.includes('lower')))
+      ) {
         btn.click();
-        return { ok: true, method: 'button text fallback', classes: btn.className };
+        return { ok: true, method: 'semantic text fallback', classes: btn.className };
+      }
+      
+      // Color match (Green for UP, Red for DOWN)
+      // rgba(0, 178, 89, ...) typically green. rgba(240, 60, 60, ...) typically red
+      if (targetWord === 'Up' && (btn.className.includes('success') || btn.className.includes('green') || bg.includes('178, 89'))) {
+         btn.click();
+         return { ok: true, method: 'color heuristic (green)', classes: btn.className };
+      }
+      if (targetWord === 'Down' && (btn.className.includes('danger') || btn.className.includes('red') || bg.includes('240, 60'))) {
+         btn.click();
+         return { ok: true, method: 'color heuristic (red)', classes: btn.className };
       }
     }
 
@@ -438,6 +518,37 @@ export async function clickTradeButton(
   throw new Error(`Could not find or click ${word} button. ${debug}`);
 }
 
+/**
+ * Switches the account type between Live and Demo based on provided DOM steps.
+ */
+export async function switchAccountType(page: Page, type: 'Live' | 'Demo'): Promise<boolean> {
+  logger.browser(`🔄 Switching account type to ${type} Account...`);
+  try {
+    // Step 1: Click the account dropdown
+    await page.locator('div.qKWSR').first().click({ force: true, timeout: 2000 });
+    await page.waitForTimeout(500);
+
+    // Step 2: Click Live or Demo
+    const targetText = type === 'Live' ? 'Live Account' : 'Demo Account';
+    await page.locator(`span:has-text("${targetText}")`).first().click({ force: true, timeout: 2000 });
+    await page.waitForTimeout(500);
+
+    // Step 3: Close the dialog targeting the Close button
+    const closeBtn = page
+      .locator('button:has(span.oQ4Z4:has-text("Close"))')
+      .or(page.getByRole('button', { name: /Close/i }))
+      .first();
+      
+    await closeBtn.click({ force: true, timeout: 2000 });
+    
+    logger.browser(`✅ Successfully switched to ${type} Account.`);
+    return true;
+  } catch (error) {
+    logger.error(`❌ Failed to switch to ${type} Account`, error);
+    return false;
+  }
+}
+
 export async function executeAutomation(signal: TradeSignal): Promise<ExecutionResult> {
   const startTime = Date.now();
   ensureDirectories();
@@ -462,7 +573,12 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
 
   logger.browser(`Starting automation for [${signal.action} ${signal.ticker}]...`);
 
-  try {
+  // Watchdog timeout to prevent infinite freezes (30 seconds)
+  const watchdogPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('WATCHDOG TIMEOUT: Task execution exceeded 30 seconds and was forcibly aborted.')), 30000);
+  });
+
+  const executionPromise = (async () => {
     const instance = await getBrowserAndPage(true);
     if (!instance) {
       throw new Error('Could not acquire browser page');
@@ -481,6 +597,17 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
         durationMs: Date.now() - startTime,
         details: balance ? 'Balance extracted successfully' : 'Balance extraction failed to parse DOM',
         balance: balance || undefined,
+      };
+    }
+
+    if (signal.action === 'SWITCH_LIVE' || signal.action === 'SWITCH_DEMO') {
+      const type = signal.action === 'SWITCH_LIVE' ? 'Live' : 'Demo';
+      const switched = await switchAccountType(page, type);
+      return {
+        success: switched,
+        signal,
+        durationMs: Date.now() - startTime,
+        details: switched ? `Switched to ${type} Account` : `Failed to switch to ${type} Account`,
       };
     }
 
@@ -545,12 +672,17 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
       details: `Executed live on dedicated Cortex Browser (${clickResult.selectorUsed})`,
       balance: finalBalance || undefined,
     };
+  })();
+
+  try {
+    // Race the actual execution against the 30-second watchdog
+    return await Promise.race([executionPromise, watchdogPromise]);
   } catch (error) {
     const durationMs = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error(`Browser automation failed for [${signal.action} ${signal.ticker}]`, error);
 
-    if (page && !page.isClosed()) {
+    if (page && !(page as Page).isClosed()) {
       try {
         const timestamp = Date.now();
         const safeTicker = signal.ticker.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -558,7 +690,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
           config.screenshotsDir,
           `err_${timestamp}_${signal.action}_${safeTicker}.png`
         );
-        await page.screenshot({ path: screenshotPath, fullPage: true });
+        await (page as Page).screenshot({ path: screenshotPath, fullPage: true });
         logger.error(`Captured error screenshot at: ${screenshotPath}`);
       } catch (screenshotError) {
         logger.error('Failed to capture failure screenshot', screenshotError);

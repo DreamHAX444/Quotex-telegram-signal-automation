@@ -95,8 +95,7 @@ function printChannelDetails(info: {
     `│  Username:     ${(info.username ? '@' + info.username : 'Private (No Username)').slice(0, 44).padEnd(46)}│`
   );
   console.log(`│  Type:         ${info.type.slice(0, 44).padEnd(46)}│`);
-  const standbyText = config.standbyTimeoutMs === Number.POSITIVE_INFINITY ? 'Infinity (Always Warm / No Timeout)' : `${config.standbyTimeoutMs}ms`;
-  console.log(`│  Standby Mode: ${standbyText.slice(0, 44).padEnd(46)}│`);
+
   if (info.participantsCount !== undefined) {
     console.log(
       `│  Members:      ${info.participantsCount.toLocaleString().slice(0, 44).padEnd(46)}│`
@@ -241,61 +240,6 @@ async function inspectTargetChannel(): Promise<void> {
   }
 }
 
-/**
- * Reads and displays the last N messages from the target VIP channel on startup
- * for verification and visibility. NO automated trades are triggered for these history messages.
- */
-async function printRecentChannelMessages(count = 3): Promise<void> {
-  logger.telegram(`Reading last ${count} messages from VIP Channel to verify connection...`);
-
-  try {
-    const channelPeer = new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
-    const messages = await client.getMessages(channelPeer, { limit: count });
-
-    if (messages.length === 0) {
-      logger.telegram(`No prior messages found in channel [ID: ${config.vipChannelIdRaw}].`);
-      return;
-    }
-
-    const line = '─'.repeat(62);
-    console.log(`\n┌${line}┐`);
-    console.log(`│${`RECENT CHANNEL HISTORY (LAST ${messages.length} MESSAGES - INFO ONLY)`.padStart(54).padEnd(62)}│`);
-    console.log(`├${line}┤`);
-
-    // Reverse so oldest of the 3 appears first, down to the most recent
-    const chronological = [...messages].reverse();
-
-    for (let i = 0; i < chronological.length; i++) {
-      const msg = chronological[i];
-      if (!msg) continue;
-      const dateStr = new Date(msg.date ? msg.date * 1000 : Date.now()).toLocaleString();
-      const rawText = msg.message || '(Media / No text)';
-      const parsed = parseSignal(rawText);
-
-      let statusTag = '💬 Chat / Info (No Action)';
-      if (parsed) {
-        statusTag = `⚡ ${parsed.action} [${parsed.ticker}]`;
-      }
-
-      console.log(`│ #${i + 1} [ID: ${msg.id}] [${dateStr}]`.padEnd(63) + '│');
-      console.log(`│    Type:   ${statusTag.padEnd(51)}│`);
-      
-      const textLines = rawText.split('\n');
-      for (const tl of textLines) {
-        const truncated = tl.length > 50 ? tl.slice(0, 47) + '...' : tl;
-        console.log(`│    Text:   "${truncated}"`.padEnd(63) + '│');
-      }
-      if (i < chronological.length - 1) {
-        console.log(`├${'┈'.repeat(62)}┤`);
-      }
-    }
-
-    console.log(`└${line}┘\n`);
-    logger.telegram(`✅ Verified message stream from VIP Channel [ID: ${config.vipChannelIdRaw}]. Ready for new messages.`);
-  } catch (err) {
-    logger.warn('Could not fetch recent channel messages on startup', err);
-  }
-}
 
 /**
  * Handles incoming NewMessage and EditedMessage events from Telegram MTProto.
@@ -450,12 +394,41 @@ async function bootstrap(): Promise<void> {
     // Inspect and display target VIP channel details in terminal
     await inspectTargetChannel();
 
-    // Read and display the last 3 messages from the channel for user confidence (no trades executed)
-    await printRecentChannelMessages(3);
 
     // Attach event handler (GramJS NewMessage handles both new channel messages and edited posts)
     client.addEventHandler(handleNewMessage, new NewMessage({}));
     logger.info(`Telegram NewMessage listener attached for VIP Channel [${config.vipChannelIdRaw}]. Listening for signals...`);
+
+    // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
+    setInterval(async () => {
+      if (isShuttingDown) return;
+      
+      let isActuallyConnected = false;
+      try {
+        if (client.connected) {
+          // Force network traffic to keep NAT state alive and detect silent ISP drops
+          await Promise.race([
+            client.getMe(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('PING_TIMEOUT')), 5000))
+          ]);
+          isActuallyConnected = true;
+        }
+      } catch (err) {
+        logger.warn(`⚠️ Telegram active ping failed (Zombie Connection Detected): ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      if (!isActuallyConnected) {
+        logger.warn('⚠️ Telegram client disconnected or unresponsive! Forcing reconnect...');
+        try {
+          // Force disconnect to clear zombie socket, then reconnect
+          await client.disconnect();
+          await client.connect();
+          logger.info('✅ Active ping reconnect successful.');
+        } catch (e) {
+          logger.error('❌ Active ping reconnect failed.', e);
+        }
+      }
+    }, 45000); // Send active ping every 45 seconds
 
     // Proactive Pre-warming: Pre-open and keep browser on standby so it is 100% ready
     if (config.autoLaunchChrome) {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { logger } from './logger.js';
 
 import { balanceManager } from './balance.js';
-import { fetchLiveBalance } from './executor.js';
+import { fetchLiveBalance, executeAutomation } from './executor.js';
 
 export function startDashboardServer(port = 3000) {
   const server = http.createServer(async (req, res) => {
@@ -64,6 +64,67 @@ export function startDashboardServer(port = 3000) {
             error: err?.message || String(err),
           })
         );
+      }
+    } else if (pathname === '/api/switch-account' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const data = JSON.parse(body);
+          const type = data.activeType; // 'Live' or 'Demo'
+          if (type !== 'Live' && type !== 'Demo') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Invalid account type' }));
+            return;
+          }
+          
+          // Trigger the switch logic via executor
+          const result = await executeAutomation({
+            action: type === 'Live' ? 'SWITCH_LIVE' : 'SWITCH_DEMO',
+            ticker: '',
+            rawText: `Switching to ${type} via Dashboard`,
+            timestamp: new Date()
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: result.success }));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
+        }
+      });
+    } else if (pathname === '/api/settings/default-account' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const type = data.defaultType;
+          
+          if (type === 'Live' || type === 'Demo') {
+            const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+            fs.writeFileSync(settingsPath, JSON.stringify({ defaultAccount: type }));
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
+        }
+      });
+    } else if (pathname === '/api/settings' && req.method === 'GET') {
+      try {
+        const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+        let settings = { defaultAccount: 'Demo' };
+        if (fs.existsSync(settingsPath)) {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(settings));
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
       }
     } else {
       res.writeHead(404);

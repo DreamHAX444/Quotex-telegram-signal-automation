@@ -72,23 +72,8 @@ function validateAndLoadConfig(): AppConfig {
     ? Number.parseInt(process.env.BROWSER_TIMEOUT_MS, 10)
     : 30000;
 
-  const rawStandby = process.env.STANDBY_TIMEOUT_MS?.trim();
-  let standbyTimeoutMs = Number.POSITIVE_INFINITY; // Default to Infinity (never times out, keeps warm indefinitely)
-  if (rawStandby) {
-    const lower = rawStandby.toLowerCase();
-    if (lower === 'infinity' || lower === 'infinite' || lower === '0' || lower === '-1' || lower === 'none') {
-      standbyTimeoutMs = Number.POSITIVE_INFINITY;
-    } else {
-      const parsed = Number.parseInt(rawStandby, 10);
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        standbyTimeoutMs = parsed;
-      }
-    }
-  }
-
   const targetUrl = process.env.TARGET_URL?.trim() || 'https://example.com/trading';
 
-  const authStoragePath = path.resolve(process.cwd(), '.auth', 'storageState.json');
   const screenshotsDir = path.resolve(process.cwd(), 'screenshots');
 
   // Chrome executable and profile directory resolution
@@ -102,10 +87,7 @@ function validateAndLoadConfig(): AppConfig {
 
   const chromeProfileName = process.env.CHROME_PROFILE_NAME?.trim() || 'Profile 1';
 
-  const cdpPort = process.env.CDP_PORT ? Number.parseInt(process.env.CDP_PORT, 10) : 9222;
-  const cdpUrl = process.env.CDP_URL?.trim() || `http://127.0.0.1:${cdpPort}`;
   const autoLaunchChrome = process.env.AUTO_LAUNCH_CHROME !== 'false';
-  const browserChannel = process.env.BROWSER_CHANNEL?.trim() || undefined;
 
   return {
     apiId,
@@ -115,17 +97,12 @@ function validateAndLoadConfig(): AppConfig {
     vipChannelIdBigInt: vipBigInt,
     headless,
     browserTimeoutMs,
-    standbyTimeoutMs,
     targetUrl,
-    authStoragePath,
     screenshotsDir,
     chromeExecutablePath,
     chromeUserDataDir,
     chromeProfileName,
-    cdpPort,
-    cdpUrl,
     autoLaunchChrome,
-    browserChannel,
   };
 }
 

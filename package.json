@@ -10,7 +10,6 @@
     "start": "node dist/bot.js",
     "test": "tsx src/test-suite.ts",
     "list-channels": "tsx src/list-channels.ts",
-    "select-profile": "tsx src/list-profiles.ts",
     "list-profiles": "tsx src/list-profiles.ts",
     "check-balance": "tsx src/check-balance.ts",
     "generate-session": "tsx src/generate.ts"

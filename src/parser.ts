@@ -293,6 +293,17 @@ const SIGNAL_PATTERNS: Array<{
   regex: RegExp;
   extract: (match: RegExpExecArray, rawText: string) => TradeSignal | null;
 }> = [
+  // Pattern 0a: SWITCH ACCOUNT TRIGGER
+  {
+    name: 'SWITCH_ACCOUNT_TRIGGER',
+    regex: /^(?:SWITCH\s+TO\s+|SWITCH\s+|CHANGE\s+TO\s+|CHANGE\s+|USE\s+)?(LIVE|DEMO)(?:\s+ACCOUNT)?$/i,
+    extract: (match, rawText) => ({
+      action: match[1]!.toUpperCase() === 'LIVE' ? 'SWITCH_LIVE' : 'SWITCH_DEMO',
+      ticker: 'ACCOUNT',
+      rawText,
+      timestamp: new Date(),
+    }),
+  },
   // Pattern 0: ACCOUNT BALANCE TRIGGER
   {
     name: 'BALANCE_TRIGGER',

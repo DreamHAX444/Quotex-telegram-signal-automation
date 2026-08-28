@@ -54,8 +54,25 @@ function isOnTargetSite(pageUrl: string): boolean {
 
 async function ensurePageOnTarget(page: Page): Promise<void> {
   if (!isOnTargetSite(page.url())) {
-    logger.browser(`Navigating Chrome to: ${config.targetUrl}`);
-    await page.goto(config.targetUrl, {
+    let defaultAccount: 'Live' | 'Demo' = 'Live';
+    try {
+      const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (settings.defaultAccount) {
+          defaultAccount = settings.defaultAccount;
+        }
+      }
+    } catch {}
+
+    let targetUrl = config.targetUrl;
+    try {
+      const baseUrl = new URL(config.targetUrl).origin;
+      targetUrl = defaultAccount === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
+    } catch {}
+
+    logger.browser(`Navigating Chrome to: ${targetUrl}`);
+    await page.goto(targetUrl, {
       waitUntil: 'domcontentloaded',
       timeout: config.browserTimeoutMs,
     });
@@ -106,22 +123,27 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
 
         logger.browser('✅ Specific browser profile launched successfully.');
         
-        // Enforce default account on startup
+        // Enforce default account on startup via URL
         try {
           const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
+          let defaultAccount: 'Live' | 'Demo' = 'Live';
           if (fs.existsSync(settingsPath)) {
             const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
             if (settings.defaultAccount) {
-              const startupPage = await globalContext.newPage();
-              await ensurePageOnTarget(startupPage);
-              const startupBalance = await balanceManager.extractAndRecordBalance(startupPage);
-              if (startupBalance && startupBalance.accountType && startupBalance.accountType !== settings.defaultAccount && startupBalance.accountType !== 'Unknown') {
-                 logger.browser(`🔄 Startup check: Enforcing default ${settings.defaultAccount} Account...`);
-                 await switchAccountType(startupPage, settings.defaultAccount as 'Live' | 'Demo');
-              }
-              await startupPage.close().catch(() => {});
+              defaultAccount = settings.defaultAccount;
             }
           }
+          
+          const startupPage = globalContext.pages()[0] || await globalContext.newPage();
+          let targetUrl = config.targetUrl;
+          try {
+            const baseUrl = new URL(config.targetUrl).origin;
+            targetUrl = defaultAccount === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
+          } catch {}
+          
+          logger.browser(`🔄 Startup check: Opening default ${defaultAccount} Account URL...`);
+          await startupPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+          await balanceManager.extractAndRecordBalance(startupPage);
         } catch (startupErr) {
           logger.warn('⚠️ Failed to enforce default account on browser startup', startupErr);
         }
@@ -519,28 +541,28 @@ export async function clickTradeButton(
 }
 
 /**
- * Switches the account type between Live and Demo based on provided DOM steps.
+ * Switches the account type between Live and Demo via direct URL navigation.
  */
 export async function switchAccountType(page: Page, type: 'Live' | 'Demo'): Promise<boolean> {
-  logger.browser(`🔄 Switching account type to ${type} Account...`);
+  logger.browser(`🔄 Switching account type to ${type} Account via URL...`);
   try {
-    // Step 1: Click the account dropdown
-    await page.locator('div.qKWSR').first().click({ force: true, timeout: 2000 });
-    await page.waitForTimeout(500);
+    let targetUrl = config.targetUrl;
+    try {
+      const baseUrl = new URL(config.targetUrl).origin;
+      targetUrl = type === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
+    } catch {}
 
-    // Step 2: Click Live or Demo
-    const targetText = type === 'Live' ? 'Live Account' : 'Demo Account';
-    await page.locator(`span:has-text("${targetText}")`).first().click({ force: true, timeout: 2000 });
-    await page.waitForTimeout(500);
-
-    // Step 3: Close the dialog targeting the Close button
-    const closeBtn = page
-      .locator('button:has(span.oQ4Z4:has-text("Close"))')
-      .or(page.getByRole('button', { name: /Close/i }))
-      .first();
-      
-    await closeBtn.click({ force: true, timeout: 2000 });
+    // Avoid unnecessary navigation if already on the correct URL (or a close variant)
+    const currentUrl = page.url();
+    const isAlreadyCorrect = type === 'Demo' ? currentUrl.includes('/demo-trade') : (currentUrl.includes('/trade') && !currentUrl.includes('/demo-trade'));
     
+    if (!isAlreadyCorrect) {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: config.browserTimeoutMs });
+      await page.waitForTimeout(1000); // Give the app a moment to render
+    } else {
+      logger.browser(`⚡ Already on ${type} Account URL. Skipping navigation.`);
+    }
+
     logger.browser(`✅ Successfully switched to ${type} Account.`);
     return true;
   } catch (error) {

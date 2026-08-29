@@ -6,8 +6,12 @@ import { logger } from './logger.js';
 
 import { balanceManager } from './balance.js';
 import { fetchLiveBalance, executeAutomation } from './executor.js';
+import { config, updateVipChannelId } from './config.js';
 
-export function startDashboardServer(port = 3000) {
+const PORT = parseInt(process.env.PORT || '8080', 10);
+const serve = serveStatic(path.join(process.cwd(), 'frontend', 'dist'), { index: ['index.html'] });
+
+export function startDashboardServer(port = PORT) {
   const server = http.createServer(async (req, res) => {
     // Add CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -59,7 +63,10 @@ export function startDashboardServer(port = 3000) {
       }
     } else if (pathname === '/api/switch-account' && req.method === 'POST') {
       let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('data', chunk => { 
+        body += chunk.toString(); 
+        if (body.length > 10240) req.destroy();
+      });
       req.on('end', async () => {
         try {
           const data = JSON.parse(body);
@@ -87,7 +94,10 @@ export function startDashboardServer(port = 3000) {
       });
     } else if (pathname === '/api/settings/default-account' && req.method === 'POST') {
       let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('data', chunk => { 
+        body += chunk.toString(); 
+        if (body.length > 10240) req.destroy();
+      });
       req.on('end', () => {
         try {
           const data = JSON.parse(body);
@@ -95,11 +105,40 @@ export function startDashboardServer(port = 3000) {
           
           if (type === 'Live' || type === 'Demo') {
             const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
-            fs.writeFileSync(settingsPath, JSON.stringify({ defaultAccount: type }));
+            fs.writeFileSync(settingsPath, JSON.stringify({ defaultAccount: type }) + '\n');
           }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true }));
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
+        }
+      });
+    } else if (pathname === '/api/channel' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ currentChannel: config.vipChannelIdRaw }));
+    } else if (pathname === '/api/channel/switch' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { 
+        body += chunk.toString(); 
+        if (body.length > 10240) req.destroy();
+      });
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const newChannelId = data.channel;
+          
+          if (!newChannelId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Missing channel ID' }));
+            return;
+          }
+
+          updateVipChannelId(newChannelId);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, newChannel: config.vipChannelIdRaw }));
         } catch (err: any) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: err?.message || String(err) }));
@@ -110,7 +149,12 @@ export function startDashboardServer(port = 3000) {
         const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
         let settings = { defaultAccount: 'Demo' };
         if (fs.existsSync(settingsPath)) {
-          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+          try {
+            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            if (parsed.defaultAccount === 'Live' || parsed.defaultAccount === 'Demo') {
+              settings.defaultAccount = parsed.defaultAccount;
+            }
+          } catch {}
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(settings));
@@ -120,7 +164,6 @@ export function startDashboardServer(port = 3000) {
       }
     } else {
       // Serve static frontend files
-      const serve = serveStatic(path.join(process.cwd(), 'frontend', 'dist'), { index: ['index.html'] });
       serve(req, res as any, () => {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
@@ -130,7 +173,9 @@ export function startDashboardServer(port = 3000) {
 
   server.on('error', (e: any) => {
     if (e.code === 'EADDRINUSE') {
+      if (port > 3020) return logger.error('Too many ports in use');
       logger.warn(`Port ${port} is in use, trying port ${port + 1}...`);
+      server.close();
       startDashboardServer(port + 1);
     } else {
       logger.error('Dashboard server error', e);

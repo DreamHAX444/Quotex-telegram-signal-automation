@@ -249,16 +249,23 @@ async function inspectTargetChannel(): Promise<void> {
 }
 
 
-let lastProcessedMessageId = 0;
+const lastProcessedMessageIds = new Map<string, number>();
 
 /**
  * Common logic to parse and execute a message from the VIP channel
  */
 function processMessage(message: any): void {
-  if (!message || message.id <= lastProcessedMessageId) return;
+  if (!message) return;
+  
+  const currentChannelStr = config.vipChannelIdBigInt.toString();
+  const lastProcessedMessageId = lastProcessedMessageIds.get(currentChannelStr) || 0;
+  
+  if (message.id !== undefined && message.id <= lastProcessedMessageId && lastProcessedMessageId !== 0) return;
 
-  // Only update last processed ID if it's strictly greater
-  lastProcessedMessageId = message.id;
+  // Only update last processed ID if it's strictly greater or we're at start
+  if (message.id !== undefined && message.id > lastProcessedMessageId) {
+    lastProcessedMessageIds.set(currentChannelStr, message.id);
+  }
 
   const rawText = message.message || '';
   const senderName = message.postAuthor || (message.sender ? (message.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
@@ -350,10 +357,10 @@ async function handleNewMessage(event: NewMessageEvent): Promise<void> {
 }
 
 /**
- * Actively polls the VIP channel every 250ms (Hyper-Fast) to bypass Telegram push update limitations for large channels.
+ * Actively polls the VIP channel every 3000ms to bypass Telegram push update limitations for large channels.
  */
 function startActivePolling(): void {
-  logger.info(`Starting HYPER-FAST active polling (250ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
+  logger.info(`Starting ACTIVE polling (3000ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
   
   let isPolling = false;
 
@@ -362,15 +369,17 @@ function startActivePolling(): void {
     if (isPolling) return; // Prevent overlapping polls if network is slow
     
     isPolling = true;
-    let nextDelay = 250;
+    let nextDelay = 3000;
 
     try {
       const messages = await client.getMessages(config.vipChannelIdRaw, { limit: 1 });
       if (messages && messages.length > 0) {
         const latestMessage = messages[0];
         if (latestMessage) {
+          const currentChannelStr = config.vipChannelIdBigInt.toString();
+          const lastProcessedMessageId = lastProcessedMessageIds.get(currentChannelStr) || 0;
           if (lastProcessedMessageId === 0) {
-            lastProcessedMessageId = latestMessage.id;
+            lastProcessedMessageIds.set(currentChannelStr, latestMessage.id);
           } else {
             // processMessage handles the ID duplicate check
             processMessage(latestMessage);
@@ -520,4 +529,7 @@ async function bootstrap(): Promise<void> {
 }
 
 // Boot application
-void bootstrap();
+bootstrap().catch((err) => {
+  logger.error('Unhandled fatal error during bootstrap', err);
+  process.exit(1);
+});

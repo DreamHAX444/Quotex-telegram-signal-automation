@@ -1,12 +1,13 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
+import fs from 'node:fs';
 import type { AppConfig } from './types.js';
 import { logger } from './logger.js';
 
 // Load environment variables from .env file
 dotenv.config();
 
-function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
+export function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error('VIP_CHANNEL_ID environment variable cannot be empty.');
@@ -107,3 +108,20 @@ function validateAndLoadConfig(): AppConfig {
 }
 
 export const config = validateAndLoadConfig();
+
+export function updateVipChannelId(newChannelId: string) {
+  const { raw, bigIntVal } = parseChannelId(newChannelId);
+  config.vipChannelIdRaw = raw;
+  config.vipChannelIdBigInt = bigIntVal;
+
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    let envContent = fs.readFileSync(envPath, 'utf8');
+    // Replace VIP_CHANNEL_ID=... with the new value
+    envContent = envContent.replace(/^VIP_CHANNEL_ID=.*$/m, `VIP_CHANNEL_ID=${raw}`);
+    fs.writeFileSync(envPath, envContent, 'utf8');
+    logger.info(`Updated VIP_CHANNEL_ID to ${raw} in .env file and memory.`);
+  } else {
+    logger.warn('Could not find .env file to save the new VIP_CHANNEL_ID.');
+  }
+}

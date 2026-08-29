@@ -4,7 +4,8 @@ export interface BalanceResponse {
   success: boolean;
   balance: {
     accountType: string;
-    balance: string;
+    formattedBalance: string;
+    numericValue: number;
     timestamp: string;
   } | null;
   history?: any[];
@@ -20,9 +21,8 @@ export interface SettingsResponse {
 export interface LogEntry {
   timestamp: string;
   level: string;
-  component: string;
   message: string;
-  metadata?: any;
+  meta?: any;
 }
 
 // In development, Vite will proxy /api to the backend. In production, it's served from the same host.
@@ -64,6 +64,22 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeType: type })
+    });
+    const data = await res.json();
+    return !!data.success;
+  },
+
+  async fetchActiveChannel(): Promise<string | null> {
+    const res = await fetch(`${API_BASE}/api/channel`);
+    const data = await res.json();
+    return data.currentChannel || null;
+  },
+
+  async setActiveChannel(channelId: string): Promise<boolean> {
+    const res = await fetch(`${API_BASE}/api/channel/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: channelId })
     });
     const data = await res.json();
     return !!data.success;

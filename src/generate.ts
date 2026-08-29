@@ -18,14 +18,14 @@ async function generateSession(): Promise<void> {
   let apiIdStr = process.env.API_ID?.trim();
   let apiHash = process.env.API_HASH?.trim();
 
-  if (!apiIdStr || apiIdStr === '39557027') {
+  if (!apiIdStr) {
     const inputApiId = await input.text(`Enter API_ID [default: ${apiIdStr || ''}]: `);
     if (inputApiId.trim()) {
       apiIdStr = inputApiId.trim();
     }
   }
 
-  if (!apiHash || apiHash === '66a67da1376ecf96225c6b06eb69ff23') {
+  if (!apiHash) {
     const inputApiHash = await input.text(`Enter API_HASH [default: ${apiHash || ''}]: `);
     if (inputApiHash.trim()) {
       apiHash = inputApiHash.trim();

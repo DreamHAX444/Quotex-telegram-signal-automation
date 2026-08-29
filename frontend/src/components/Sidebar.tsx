@@ -5,24 +5,28 @@ interface SidebarProps {
   balance: string;
   accountType: string;
   defaultAccount: string;
+  activeChannel: string | null;
   lastSync: string;
   strategy: string;
   isSyncing: boolean;
   onRefresh: () => void;
   onActiveChange: (type: string) => void;
   onDefaultChange: (type: string) => void;
+  onChannelChange: (channelId: string) => void;
 }
 
 export function Sidebar({ 
   balance, 
   accountType, 
   defaultAccount, 
+  activeChannel,
   lastSync, 
   strategy, 
   isSyncing, 
   onRefresh, 
   onActiveChange, 
-  onDefaultChange 
+  onDefaultChange,
+  onChannelChange 
 }: SidebarProps) {
   return (
     <aside className="col-span-1 lg:col-span-3 border-b lg:border-b-0 lg:border-r border-border bg-card p-4 sm:p-6 flex flex-col gap-6 overflow-y-auto z-10 custom-scrollbar">
@@ -73,8 +77,10 @@ export function Sidebar({
       <AccountControls 
         activeAccount={accountType} 
         defaultAccount={defaultAccount}
+        activeChannel={activeChannel}
         onActiveChange={onActiveChange}
         onDefaultChange={onDefaultChange}
+        onChannelChange={onChannelChange}
       />
 
       {/* System Config Section */}

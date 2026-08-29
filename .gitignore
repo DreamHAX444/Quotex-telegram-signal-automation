@@ -4,3 +4,4 @@ dist/
 .auth/
 screenshots/
 *.log
+test_log.txt

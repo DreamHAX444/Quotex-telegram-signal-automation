@@ -63,7 +63,6 @@ export function LogsViewer({ logs, lastUpdate, onClear }: LogsViewerProps) {
             <div key={idx} className="flex flex-col sm:flex-row sm:gap-3 py-0.5 sm:py-0 hover:bg-muted/30 px-2 -mx-2 rounded transition-colors group">
               <span className="text-muted-foreground/60 w-[70px] flex-none shrink-0">{log.timestamp}</span>
               <span className={`w-[60px] flex-none shrink-0 font-semibold ${getLogColor(log.level)}`}>{log.level}</span>
-              <span className="text-muted-foreground/80 w-[75px] flex-none shrink-0">[{log.component}]</span>
               <span className="text-foreground break-all sm:break-words">{log.message}</span>
             </div>
           ))

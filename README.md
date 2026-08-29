@@ -162,7 +162,7 @@ This connects to your configured Chrome profile, inspects the trading interface 
 
 To view all Google Chrome profiles installed on your computer and select which one to use:
 ```bash
-npm run select-profile
+npm run list-profiles
 ```
 This inspects Chrome's profile metadata and displays an interactive table with:
 * Profile Folder (e.g. `Default`, `Profile 1`, `Profile 2`)

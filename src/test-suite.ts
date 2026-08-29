@@ -431,17 +431,17 @@ async function runTestSuite(): Promise<void> {
   // ----------------------------------------------------
   console.log('▶ Test 4: Market Switch Behavior (Always Switch, No Cache)...');
 
-  // getActiveMarket always returns null — no caching
+  // Market functions use caching in production
   setActiveMarket(null);
-  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should always be null');
+  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should be null initially');
 
   setActiveMarket('USD CHF OTC');
-  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should still be null — no caching');
+  assert.strictEqual(getActiveMarket(), 'USD CHF OTC', 'getActiveMarket() should return cached market');
 
   setActiveMarket('EUR USD');
-  assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should still be null — no caching');
+  assert.strictEqual(getActiveMarket(), 'EUR USD', 'getActiveMarket() should return updated market');
 
-  console.log('✔ Test 4 Passed: Market caching removed — every signal triggers a fresh market switch.\n');
+  console.log('✔ Test 4 Passed: Market caching functions correctly.\n');
 
   console.log('========================================');
   console.log('  🎉 All Test Suites Passed 100%!       ');

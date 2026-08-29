@@ -16,11 +16,10 @@ export function cleanTicker(raw?: string | null): string {
  * Extracts duration in minutes from raw text (e.g. "5M", "2 MINUTES", "1H")
  */
 export function extractDurationMinutes(text: string): number | undefined {
-  const match = text.match(/\b(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)\b/i);
+  const match = text.match(/\b(?:([0-9]+)\s*(?:M|MIN(?:UTE)?S?)|([0-9]+)\s*H(?:OUR)?S?)\b/i);
   if (match) {
     if (match[1]) return parseInt(match[1], 10);
-    if (match[2]) return parseInt(match[2], 10);
-    if (match[3]) return parseInt(match[3], 10) * 60;
+    if (match[2]) return parseInt(match[2], 10) * 60;
   }
   return undefined;
 }
@@ -74,7 +73,7 @@ export function normalizeAction(rawAction?: string | null): ActionType {
   if (['ABORT', 'CANCEL', 'CHANGE', 'STOP', 'IGNORE'].includes(upper)) {
     return 'ABORT';
   }
-  return upper as ActionType;
+  throw new Error(`Unknown action type: ${upper}`);
 }
 
 const UP_EMOJIS = ['🟢', '🟩', '🔼', '⬆️', '🔺', '📈'];
@@ -319,10 +318,10 @@ const SIGNAL_PATTERNS: Array<{
     }),
   },
   
-  // Pattern 0.5: ABORT / CANCEL / CHANGE TRIGGER
+  // Pattern 0.5: ABORT / CANCEL / STOP TRIGGER
   {
     name: 'ABORT_TRIGGER',
-    regex: /^(?:ABORT|CANCEL|CHANGE|STOP|IGNORE)$/i,
+    regex: /^(?:ABORT|CANCEL|STOP|IGNORE)$/i,
     extract: (_match, rawText) => ({
       action: 'ABORT',
       ticker: 'ACTIVE',
@@ -331,10 +330,10 @@ const SIGNAL_PATTERNS: Array<{
     }),
   },
 
-  // Pattern 0.6: STANDALONE DURATION TRIGGER
+  // Pattern 0.6: SET DURATION TRIGGER
   {
     name: 'STANDALONE_DURATION',
-    regex: /^(?:CHANGE\s+(?:TIME|DURATION)\s+TO\s+)?(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)$/i,
+    regex: /^(?:CHANGE\s+(?:TIME|DURATION)\s+TO\s+)(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)$/i,
     extract: (match, rawText) => {
       let durationMinutes = undefined;
       if (match[1]) durationMinutes = parseInt(match[1], 10);

@@ -13,6 +13,7 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lastLogUpdate, setLastLogUpdate] = useState('Syncing...');
+  const [activeChannel, setActiveChannel] = useState<string | null>(null);
   
   // Strategy is hardcoded in the original UI for now
   const strategy = 'Smart Sequential v2'; 
@@ -23,12 +24,17 @@ function App() {
       if (data && data.defaultAccount) {
         setDefaultAccount(data.defaultAccount);
       }
+      
+      const channel = await api.fetchActiveChannel();
+      if (channel) {
+        setActiveChannel(channel);
+      }
     } catch (e) {}
   };
 
   const updateBalanceState = (balanceData: any) => {
-    if (balanceData && balanceData.balance) {
-      setBalance(balanceData.balance);
+    if (balanceData && balanceData.formattedBalance) {
+      setBalance(balanceData.formattedBalance);
       setAccountType(balanceData.accountType || 'Unknown');
       
       const d = new Date(balanceData.timestamp);
@@ -86,6 +92,10 @@ function App() {
     setDefaultAccount(type);
   };
 
+  const handleChannelChange = (channelId: string) => {
+    setActiveChannel(channelId);
+  };
+
   const handleClearLogs = () => {
     setLogs([]);
   };
@@ -99,12 +109,14 @@ function App() {
           balance={balance}
           accountType={accountType}
           defaultAccount={defaultAccount}
+          activeChannel={activeChannel}
           lastSync={lastSync}
           strategy={strategy}
           isSyncing={isSyncing}
           onRefresh={() => fetchBalance(true)}
           onActiveChange={handleActiveChange}
           onDefaultChange={handleDefaultChange}
+          onChannelChange={handleChannelChange}
         />
         
         <LogsViewer 

@@ -162,7 +162,9 @@ export async function extractBalanceFromPage(page: Page): Promise<AccountBalance
       // -------------------------------------------------------------
       // STRATEGY 2: Account Label Anchoring & Sibling/Parent Traversal
       // -------------------------------------------------------------
-      const allElements = Array.from(document.querySelectorAll('div, span, p, a, button, b, strong'));
+      const allElements = Array.from(
+        document.querySelectorAll('header *, nav *, .usermenu *, [class*="header"] *, [class*="topbar"] *, [class*="account"] *, [class*="balance"] *')
+      ).filter(el => ['DIV', 'SPAN', 'P', 'A', 'BUTTON', 'B', 'STRONG'].includes(el.tagName));
       const accountLabelRegex = /^(?:demo|live|real|standard|practice)\s*account$/i;
 
       for (const el of allElements) {

@@ -1,5 +1,5 @@
 /**
- * Structured Timestamped Logger
+ * Simple Developer-Friendly Logger
  */
 import { EventEmitter } from 'node:events';
 
@@ -8,15 +8,19 @@ logEmitter.setMaxListeners(0); // Multiple SSE clients may subscribe simultaneou
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'QUEUE' | 'BROWSER' | 'TELEGRAM';
 
-const formatter = new Intl.DateTimeFormat('en-CA', {
-  year: 'numeric', month: '2-digit', day: '2-digit',
-  hour: '2-digit', minute: '2-digit', second: '2-digit',
-  fractionalSecondDigits: 3, hour12: false
-});
-
-function formatTimestamp(): string {
-  return formatter.format(new Date()).replace(', ', ' ');
-}
+// Basic ANSI colors for terminal
+const colors = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  
+  INFO: '\x1b[36m',     // Cyan
+  WARN: '\x1b[33m',     // Yellow
+  ERROR: '\x1b[31m',    // Red
+  DEBUG: '\x1b[90m',    // Gray
+  QUEUE: '\x1b[35m',    // Magenta
+  BROWSER: '\x1b[34m',  // Blue
+  TELEGRAM: '\x1b[32m'  // Green
+};
 
 export interface LogEntry {
   timestamp: string;
@@ -28,21 +32,33 @@ export interface LogEntry {
 const logHistory: LogEntry[] = [];
 
 function log(level: LogLevel, message: string, meta?: unknown): void {
-  const timestamp = formatTimestamp();
-  const prefix = `[${timestamp}] [${level.padEnd(8)}]`;
+  // Simple HH:MM:SS timestamp (better for devs than full date)
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const timestamp = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   
+  const color = colors[level] || colors.reset;
+  const prefix = `${colors.dim}[${timestamp}]${colors.reset} ${color}${level.padEnd(8)}${colors.reset}`;
+
   let formattedMeta: unknown = meta;
+  
+  // Route to proper stdout/stderr
+  const logFn = level === 'ERROR' ? console.error : 
+                level === 'WARN' ? console.warn : 
+                level === 'DEBUG' ? console.debug : console.log;
+
   if (meta !== undefined) {
     if (meta instanceof Error) {
-      console.log(`${prefix} ${message} - ${meta.stack || meta.message}`);
       formattedMeta = meta.stack || meta.message;
+      logFn(`${prefix} ${message}\n${colors.dim}${formattedMeta}${colors.reset}`);
     } else {
-      console.log(`${prefix} ${message}`, JSON.stringify(meta, null, 2));
+      logFn(`${prefix} ${message}`, meta);
     }
   } else {
-    console.log(`${prefix} ${message}`);
+    logFn(`${prefix} ${message}`);
   }
 
+  // Save clean (uncolored) entry for frontend dashboard
   const entry = { timestamp, level, message, meta: formattedMeta };
   logHistory.push(entry);
   if (logHistory.length > 500) {

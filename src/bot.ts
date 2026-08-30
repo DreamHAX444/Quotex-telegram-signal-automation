@@ -85,24 +85,9 @@ function printChannelDetails(info: {
   type: string;
   participantsCount?: number | undefined;
 }): void {
-  const line = '─'.repeat(62);
-  console.log(`\n┌${line}┐`);
-  console.log(`│${'VIP CHANNEL DETAILS'.padStart(40).padEnd(62)}│`);
-  console.log(`├${line}┤`);
-  console.log(`│  Title:        ${info.title.slice(0, 44).padEnd(46)}│`);
-  console.log(`│  Config ID:    ${info.id.slice(0, 44).padEnd(46)}│`);
-  console.log(`│  BigInt ID:    ${info.bigIntId.slice(0, 44).padEnd(46)}│`);
-  console.log(
-    `│  Username:     ${(info.username ? '@' + info.username : 'Private (No Username)').slice(0, 44).padEnd(46)}│`
-  );
-  console.log(`│  Type:         ${info.type.slice(0, 44).padEnd(46)}│`);
-
-  if (info.participantsCount !== undefined) {
-    console.log(
-      `│  Members:      ${info.participantsCount.toLocaleString().slice(0, 44).padEnd(46)}│`
-    );
-  }
-  console.log(`└${line}┘\n`);
+  const usernameStr = info.username ? '@' + info.username : 'Private';
+  const membersStr = info.participantsCount !== undefined ? info.participantsCount.toLocaleString() : 'Unknown';
+  logger.telegram(`Linked to VIP Channel: ${info.title} (${info.type}) | ID: ${info.id} | ${usernameStr} | Members: ${membersStr}`);
 }
 
 /**
@@ -115,71 +100,34 @@ function printIncomingMessage(msgDetails: {
   text: string;
   parsedSignal: TradeSignal | null;
 }): void {
-  const line = '═'.repeat(62);
-  const thinLine = '─'.repeat(62);
-  console.log(`\n╔${line}╗`);
-  console.log(`║${'NEW VIP CHANNEL MESSAGE'.padStart(42).padEnd(62)}║`);
-  console.log(`╠${line}╣`);
-  console.log(`║ Message ID:   #${msgDetails.messageId.toString().padEnd(46)}║`);
-  console.log(`║ Date / Time:  ${msgDetails.date.toLocaleString().padEnd(46)}║`);
-  console.log(`║ Sender:       ${msgDetails.senderName.slice(0, 44).padEnd(46)}║`);
-  console.log(`╟${thinLine}╢`);
-  console.log(`║ Raw Message Content:                                         ║`);
-  const lines = msgDetails.text.split('\n');
-  for (const l of lines) {
-    const truncated = l.length > 56 ? l.slice(0, 53) + '...' : l;
-    console.log(`║   ${truncated.padEnd(58)} ║`);
-  }
-  console.log(`╟${thinLine}╢`);
+  // Print raw message as a single line
+  const cleanText = msgDetails.text.replace(/\n/g, ' ↵ ');
+  logger.telegram(`Message #${msgDetails.messageId} from [${msgDetails.senderName}]: ${cleanText}`);
+
   if (msgDetails.parsedSignal) {
-    if (msgDetails.parsedSignal.action === 'BALANCE') {
-      console.log(
-        `║ Status:       💰 ACCOUNT BALANCE CHECK TRIGGER               ║`
-      );
-    } else if (msgDetails.parsedSignal.action === 'PREPARE') {
-      console.log(
-        `║ Status:       ⚡ PRE-WARM / STANDBY: ${msgDetails.parsedSignal.ticker.padEnd(31)}║`
-      );
-    } else if (msgDetails.parsedSignal.action === 'SET_DURATION') {
-      console.log(
-        `║ Status:       ⏱️ TIME UPDATE: ${msgDetails.parsedSignal.durationMinutes} minutes`.padEnd(61) + '║'
-      );
-    } else if (msgDetails.parsedSignal.action === 'ABORT') {
-      console.log(
-        `║ Status:       🛑 ABORT/CANCEL PREVIOUS SIGNAL                ║`
-      );
-    } else if (msgDetails.parsedSignal.action === 'UP' || msgDetails.parsedSignal.action === 'CALL' || msgDetails.parsedSignal.action === 'BUY') {
-      console.log(
-        `║ Status:       🟢 VALID UP SIGNAL: ${msgDetails.parsedSignal.ticker.padEnd(34)}║`
-      );
-    } else if (msgDetails.parsedSignal.action === 'DOWN' || msgDetails.parsedSignal.action === 'PUT' || msgDetails.parsedSignal.action === 'SELL') {
-      console.log(
-        `║ Status:       🔴 VALID DOWN SIGNAL: ${msgDetails.parsedSignal.ticker.padEnd(32)}║`
-      );
+    const s = msgDetails.parsedSignal;
+    if (s.action === 'BALANCE') {
+      logger.info(`↳ Parsed: 💰 BALANCE CHECK TRIGGER`);
+    } else if (s.action === 'PREPARE') {
+      logger.info(`↳ Parsed: ⚡ PRE-WARM / STANDBY: ${s.ticker}`);
+    } else if (s.action === 'SET_DURATION') {
+      logger.info(`↳ Parsed: ⏱️ TIME UPDATE: ${s.durationMinutes} minutes`);
+    } else if (s.action === 'ABORT') {
+      logger.info(`↳ Parsed: 🛑 ABORT / CANCEL PREVIOUS SIGNAL`);
     } else {
-      console.log(
-        `║ Status:       ✅ VALID ${msgDetails.parsedSignal.action} SIGNAL: ${msgDetails.parsedSignal.ticker.padEnd(28)}║`
-      );
-    }
-    if (msgDetails.parsedSignal.price !== undefined) {
-      console.log(
-        `║ Entry Price:  ${msgDetails.parsedSignal.price.toString().padEnd(46)}║`
-      );
-    }
-    if (msgDetails.parsedSignal.takeProfit !== undefined) {
-      console.log(
-        `║ Take Profit:  ${msgDetails.parsedSignal.takeProfit.toString().padEnd(46)}║`
-      );
-    }
-    if (msgDetails.parsedSignal.stopLoss !== undefined) {
-      console.log(
-        `║ Stop Loss:    ${msgDetails.parsedSignal.stopLoss.toString().padEnd(46)}║`
-      );
+      let icon = '✅';
+      if (['UP', 'CALL', 'BUY'].includes(s.action)) icon = '🟢';
+      if (['DOWN', 'PUT', 'SELL'].includes(s.action)) icon = '🔴';
+      
+      let details = `↳ Parsed: ${icon} VALID ${s.action} SIGNAL: ${s.ticker}`;
+      if (s.price !== undefined) details += ` | Entry: ${s.price}`;
+      if (s.takeProfit !== undefined) details += ` | TP: ${s.takeProfit}`;
+      if (s.stopLoss !== undefined) details += ` | SL: ${s.stopLoss}`;
+      logger.info(details);
     }
   } else {
-    console.log(`║ Status:       ⚠️  UNRECOGNIZED FORMAT / DROPPED               ║`);
+    logger.warn(`↳ Parsed: ⚠️ UNRECOGNIZED FORMAT / DROPPED`);
   }
-  console.log(`╚${line}╝\n`);
 }
 
 /**
@@ -266,6 +214,12 @@ function processMessage(message: any): void {
     if (processedMessageIdSet.has(messageKey)) {
       return; // Strictly drop duplicates from event + polling races
     }
+    
+    const highestSeen = lastProcessedMessageIds.get(currentChannelStr) || 0;
+    if (highestSeen > 0 && message.id < highestSeen - 50) {
+      return; // Message is suspiciously old, drop it to prevent historical zombies
+    }
+
     processedMessageIdSet.add(messageKey);
     // Amortized eviction: batch-remove oldest entries when set grows too large
     if (processedMessageIdSet.size > 2000) {
@@ -276,7 +230,10 @@ function processMessage(message: any): void {
         processedMessageIdSet.delete(entry.value);
       }
     }
-    lastProcessedMessageIds.set(currentChannelStr, message.id);
+    
+    if (message.id > highestSeen) {
+      lastProcessedMessageIds.set(currentChannelStr, message.id);
+    }
   }
 
   const rawText = message.message || '';
@@ -372,29 +329,45 @@ async function handleNewMessage(event: NewMessageEvent): Promise<void> {
  * Actively polls the VIP channel every 3000ms to bypass Telegram push update limitations for large channels.
  */
 function startActivePolling(): void {
-  logger.info(`Starting ACTIVE polling (3000ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
+  logger.info(`Starting ACTIVE polling (300ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
   
   let isPolling = false;
+  let isFirstPoll = true;
+  let lastPolledChannelStr = config.vipChannelIdBigInt.toString();
 
   async function poll() {
     if (isShuttingDown || !client.connected) return;
     if (isPolling) return; // Prevent overlapping polls if network is slow
     
     isPolling = true;
-    let nextDelay = 3000;
+    let nextDelay = 300;
 
     try {
-      const messages = await client.getMessages(config.vipChannelIdRaw, { limit: 1 });
+      const currentChannelStr = config.vipChannelIdBigInt.toString();
+      if (currentChannelStr !== lastPolledChannelStr) {
+        logger.info(`Channel switch detected (${lastPolledChannelStr} -> ${currentChannelStr}). Resetting poll state to ignore history.`);
+        isFirstPoll = true;
+        lastPolledChannelStr = currentChannelStr;
+      }
+
+      const messages = await client.getMessages(config.vipChannelIdRaw, { limit: 15 });
       if (messages && messages.length > 0) {
-        const latestMessage = messages[0];
-        if (latestMessage) {
-          const currentChannelStr = config.vipChannelIdBigInt.toString();
-          const lastProcessedMessageId = lastProcessedMessageIds.get(currentChannelStr) || 0;
-          if (lastProcessedMessageId === 0) {
-            lastProcessedMessageIds.set(currentChannelStr, latestMessage.id);
-          } else {
-            // processMessage handles the ID duplicate check
-            processMessage(latestMessage);
+        
+        if (isFirstPoll) {
+          isFirstPoll = false;
+          if (messages[0]?.id !== undefined) {
+            lastProcessedMessageIds.set(currentChannelStr, messages[0].id);
+          }
+          // Mark history as processed so we don't execute past signals
+          for (const msg of messages) {
+            if (msg.id !== undefined) {
+              processedMessageIdSet.add(`${currentChannelStr}_${msg.id}`);
+            }
+          }
+        } else {
+          // Loop backwards: oldest first to newest, to preserve chronological signal processing
+          for (let i = messages.length - 1; i >= 0; i--) {
+            processMessage(messages[i]);
           }
         }
       }

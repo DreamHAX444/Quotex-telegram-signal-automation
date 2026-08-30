@@ -641,7 +641,7 @@ async function openMarketPicker(page: Page): Promise<boolean> {
   });
 
   if (isOpened) {
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(50);
     const searchVisible = await page
       .locator('input[placeholder*="Search" i], input[type="search"], input[class*="search" i]')
       .first()
@@ -659,7 +659,7 @@ async function openMarketPicker(page: Page): Promise<boolean> {
     const plusBtn = page.locator('button.CAZSg, button.BEz9j, button:has(svg.icon-plus):not(:has-text("Deposit"))').first();
     if (await plusBtn.isVisible({ timeout: 400 }).catch(() => false)) {
       await plusBtn.click({ force: true });
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(50);
       return true;
     }
   } catch {}
@@ -699,18 +699,10 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
     });
     
     logger.browser(`🔍 Typed "${searchQuery}" into picker search box`);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(50);
 
     const clicked = await page.evaluate(
       ({ targetCanon }) => {
-        function canon(s: string): string {
-          return s
-            .replace(/\+?\d{1,3}\s*%/g, '')
-            .toUpperCase()
-            .replace(/\bOTC\b/g, '')
-            .replace(/[^A-Z0-9]/g, '');
-        }
-
         // 1. Primary: Exact Quotex Asset Row & Name Selectors (.R2Rgm, .vPvlJ, span.Z2fyK, .teoXG, .e4qZ6)
         const primaryRows = document.querySelectorAll(
           '.yejPg .R2Rgm, .yejPg .vPvlJ, .R2Rgm, .vPvlJ, .teoXG, .e4qZ6, span.Z2fyK'
@@ -721,7 +713,7 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
           const text = (nameSpan.textContent || '').trim();
           if (!text) continue;
 
-          const textCanon = canon(text);
+          const textCanon = text.replace(/\+?\d{1,3}\s*%/g, '').toUpperCase().replace(/\bOTC\b/g, '').replace(/[^A-Z0-9]/g, '');
           if (textCanon === targetCanon || textCanon.includes(targetCanon) || targetCanon.includes(textCanon)) {
             const targetToClick = (el.querySelector('span.Z2fyK, .teoXG, .e4qZ6') || el) as HTMLElement;
             targetToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
@@ -731,27 +723,6 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
         }
 
         // 2. Secondary: Generalized Fallback Scanner
-        function scoreMatch(el: Element): number {
-          const text = (el.textContent || '').trim();
-          if (!text) return -1;
-          const lower = text.toLowerCase();
-          if (lower.includes('deposit') || lower.includes('withdraw') || lower.includes('live account') || lower.includes('demo account')) {
-            return -1;
-          }
-
-          const rect = el.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0 || rect.height > 150) return -1;
-
-          const textCanon = canon(text);
-          if (!textCanon) return -1;
-
-          if (textCanon === targetCanon) return 100;
-          if (textCanon.includes(targetCanon)) return 85;
-          if (targetCanon.includes(textCanon) && textCanon.length >= 4) return 75;
-
-          return -1;
-        }
-
         const candidates = document.querySelectorAll(
           'li, a, tr, [class*="item"], [class*="pair"], [class*="asset"], ' +
           '[class*="result"], [class*="option"], [role="option"], [role="row"], button'
@@ -761,7 +732,25 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
         let bestScore = -1;
 
         for (const el of candidates) {
-          const score = scoreMatch(el);
+          const text = (el.textContent || '').trim();
+          if (!text) continue;
+          
+          const lower = text.toLowerCase();
+          if (lower.includes('deposit') || lower.includes('withdraw') || lower.includes('live account') || lower.includes('demo account')) {
+            continue;
+          }
+
+          const rect = el.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0 || rect.height > 150) continue;
+
+          const textCanon = text.replace(/\+?\d{1,3}\s*%/g, '').toUpperCase().replace(/\bOTC\b/g, '').replace(/[^A-Z0-9]/g, '');
+          if (!textCanon) continue;
+
+          let score = -1;
+          if (textCanon === targetCanon) score = 100;
+          else if (textCanon.includes(targetCanon)) score = 85;
+          else if (targetCanon.includes(textCanon) && textCanon.length >= 4) score = 75;
+
           if (score > bestScore) {
             bestScore = score;
             bestEl = el as HTMLElement;
@@ -811,7 +800,7 @@ async function verifyMarketSwitched(page: Page, targetTicker: string, maxWaitMs:
       setActiveMarket(currentMarket);
       return true;
     }
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(50);
   }
 
   const finalCheck = await readActiveMarketFromDOM(page);
@@ -869,7 +858,7 @@ async function selectMarket(page: Page, rawTicker: string): Promise<void> {
     if (attempt === 2) {
       logger.browser('🔁 Retrying market switch (attempt 2/2)...');
       await page.keyboard.press('Escape').catch(() => {});
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(50);
     }
 
     const pickerOpened = await openMarketPicker(page);
@@ -1114,7 +1103,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
     }
   }
 
-  let page: Page | null = null;
+  let page: any = null;
   let screenshotPath: string | undefined;
 
   logger.browser(`Starting automation for [${signal.action} ${signal.ticker}]...`);

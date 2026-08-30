@@ -10,7 +10,7 @@ dotenv.config();
 
 function extractPeerChannelId(target: unknown): bigint | null {
   if (!target || typeof target !== 'object') return null;
-  const t = target as Record<string, any>;
+  const t = target as { channelId?: { toString: () => string }; peerId?: unknown; chatId?: { toString: () => string } };
 
   if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
     return BigInt(target.channelId.toString());

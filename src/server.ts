@@ -130,19 +130,18 @@ export function startDashboardServer(port = PORT) {
         if (!data.channel) {
           return jsonResponse(400, { success: false, error: 'Missing channel ID' });
         }
-        updateVipChannelId(data.channel);
+        await updateVipChannelId(data.channel);
         jsonResponse(200, { success: true, newChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/settings' && req.method === 'GET') {
         const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
         let settings = { defaultAccount: 'Demo' };
-        if (fs.existsSync(settingsPath)) {
-          try {
-            const parsed = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
-            if (parsed.defaultAccount === 'Live' || parsed.defaultAccount === 'Demo') {
-              settings.defaultAccount = parsed.defaultAccount;
-            }
-          } catch {}
-        }
+        try {
+          await fs.promises.access(settingsPath);
+          const parsed = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
+          if (parsed.defaultAccount === 'Live' || parsed.defaultAccount === 'Demo') {
+            settings.defaultAccount = parsed.defaultAccount;
+          }
+        } catch {}
         jsonResponse(200, settings);
       } else {
         serveStatic(req, res);

@@ -311,13 +311,13 @@ async function ensurePageOnTarget(page: Page): Promise<void> {
           defaultAccount = settings.defaultAccount;
         }
       }
-    } catch {}
+    } catch (err: unknown) { logger.debug('Settings parse error', err); }
 
     let targetUrl = config.targetUrl;
     try {
       const baseUrl = new URL(config.targetUrl).origin;
       targetUrl = defaultAccount === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
-    } catch {}
+    } catch (err: unknown) { logger.debug('URL parse error', err); }
 
     logger.browser(`Navigating Chrome to: ${targetUrl}`);
     await page.goto(targetUrl, {
@@ -387,7 +387,7 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
           try {
             const baseUrl = new URL(config.targetUrl).origin;
             targetUrl = defaultAccount === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
-          } catch {}
+          } catch (err: unknown) { logger.debug('Startup URL parse error', err); }
           
           logger.browser(`🔄 Startup check: Opening default ${defaultAccount} Account URL...`);
           await startupPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
@@ -425,7 +425,7 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
             // Wait a moment for OS cleanup before retrying
             await new Promise(res => setTimeout(res, 2000));
             continue; // Retry launch
-          } catch (cleanupErr) {
+          } catch (cleanupErr: unknown) {
             logger.error('❌ Auto-cleanup failed.', cleanupErr);
           }
           

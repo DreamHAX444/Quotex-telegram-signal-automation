@@ -45,7 +45,7 @@ const client = new TelegramClient(session, config.apiId, config.apiHash, {
  */
 function extractPeerChannelId(target: unknown): bigint | null {
   if (!target || typeof target !== 'object') return null;
-  const t = target as Record<string, any>;
+  const t = target as { channelId?: { toString: () => string }; peerId?: unknown; chatId?: { toString: () => string } };
 
   if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
     return BigInt(target.channelId.toString());
@@ -81,9 +81,9 @@ function printChannelDetails(info: {
   title: string;
   id: string;
   bigIntId: string;
-  username?: string;
+  username?: string | undefined;
   type: string;
-  participantsCount?: number;
+  participantsCount?: number | undefined;
 }): void {
   const line = '─'.repeat(62);
   console.log(`\n┌${line}┐`);
@@ -191,7 +191,7 @@ async function inspectTargetChannel(): Promise<void> {
   try {
     const dialogs = await client.getDialogs({ limit: 200 });
     const targetDialog = dialogs.find((d) => {
-      const entity = d.entity as any;
+      const entity = d.entity as { id?: { toString: () => string }; title?: string; username?: string; broadcast?: boolean; megagroup?: boolean; participantsCount?: number };
       if (entity?.id && BigInt(entity.id.toString()) === config.vipChannelIdBigInt) {
         return true;
       }
@@ -200,7 +200,7 @@ async function inspectTargetChannel(): Promise<void> {
     });
 
     if (targetDialog && targetDialog.entity) {
-      const entity = targetDialog.entity as any;
+      const entity = targetDialog.entity as { title?: string; username?: string; broadcast?: boolean; megagroup?: boolean; participantsCount?: number };
       printChannelDetails({
         title: entity.title || targetDialog.title || 'Untitled Channel',
         id: config.vipChannelIdRaw,
@@ -215,7 +215,7 @@ async function inspectTargetChannel(): Promise<void> {
     // Direct entity lookup fallback
     try {
       const channelPeer = new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
-      const entity = (await client.getEntity(channelPeer)) as any;
+      const entity = (await client.getEntity(channelPeer)) as { title?: string; username?: string; broadcast?: boolean; participantsCount?: number };
       if (entity) {
         printChannelDetails({
           title: entity.title || 'VIP Channel',
@@ -394,7 +394,7 @@ function startActivePolling(): void {
         }
       }
     } catch (err: unknown) {
-      const e = err as Record<string, any>;
+      const e = err as { errorMessage?: string; message?: string; seconds?: number };
       if (e?.errorMessage === 'FLOOD_WAIT' || e?.message?.includes('FLOOD')) {
         const waitTime = e.seconds || 5;
         logger.warn(`⚠️ Telegram rate limit (FloodWait) hit during polling. Backing off for ${waitTime} seconds...`);

@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import input from 'input';
-import dotenv from 'dotenv';
+import * as readline from 'node:readline/promises';
 import { config } from './config.js';
-
-dotenv.config();
 
 interface ChromeProfileInfo {
   folderName: string;
@@ -95,22 +92,32 @@ async function selectChromeProfile(): Promise<void> {
   );
 
   const choices = profiles.map(
-    (p) => `${p.folderName} (${p.displayName}${p.email !== '(No Email Linked)' ? ' - ' + p.email : ''})`
+    (p, i) => `${i + 1}. ${p.folderName} (${p.displayName}${p.email !== '(No Email Linked)' ? ' - ' + p.email : ''})`
   );
+  
+  console.log('Available Profiles:');
+  choices.forEach(c => console.log(c));
 
-  const selectedChoice = await input.select('Select the Chrome profile you want to use for automation:', choices);
-  const selectedFolderName = selectedChoice.split(' ')[0]!;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ans = await rl.question(`\nEnter the number of the Chrome profile you want to use for automation [1-${profiles.length}]: `);
+  rl.close();
 
-  // Update .env file
+  const choiceIndex = parseInt(ans.trim(), 10) - 1;
+  const selectedProfile = profiles[choiceIndex];
+
+  if (!selectedProfile) {
+    console.error('❌ Invalid selection.');
+    process.exit(1);
+  }
+
+  const selectedFolderName = selectedProfile.folderName;
+
   const envPath = path.resolve(process.cwd(), '.env');
   let envContent = '';
   if (fs.existsSync(envPath)) {
     envContent = fs.readFileSync(envPath, 'utf8');
     if (envContent.includes('CHROME_PROFILE_NAME=')) {
-      envContent = envContent.replace(
-        /CHROME_PROFILE_NAME=.*/g,
-        `CHROME_PROFILE_NAME=${selectedFolderName}`
-      );
+      envContent = envContent.replace(/^CHROME_PROFILE_NAME=.*$/m, `CHROME_PROFILE_NAME=${selectedFolderName}`);
     } else {
       envContent += `\nCHROME_PROFILE_NAME=${selectedFolderName}\n`;
     }
@@ -119,14 +126,8 @@ async function selectChromeProfile(): Promise<void> {
   }
 
   fs.writeFileSync(envPath, envContent, 'utf8');
-
-  console.log('\n===============================================================');
-  console.log(`✅ Active Chrome Profile updated to: "${selectedFolderName}"`);
-  console.log(`💾 Saved to ${envPath}`);
-  console.log('===============================================================\n');
-  console.log('To open this profile with remote debugging enabled, run:');
-  console.log('   npm run open-chrome\n');
-
+  console.log(`\n✅ Successfully updated CHROME_PROFILE_NAME to "${selectedFolderName}" in .env`);
+  console.log('Restart the bot using `npm run dev` to apply the changes.');
   process.exit(0);
 }
 

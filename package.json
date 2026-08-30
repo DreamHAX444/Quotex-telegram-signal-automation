@@ -5,14 +5,14 @@
   "type": "module",
   "main": "dist/bot.js",
   "scripts": {
-    "dev": "tsx src/bot.ts",
+    "dev": "tsx --env-file=.env src/bot.ts",
     "build": "tsc",
-    "start": "node dist/bot.js",
-    "test": "tsx src/test-suite.ts",
-    "list-channels": "tsx src/list-channels.ts",
-    "list-profiles": "tsx src/list-profiles.ts",
-    "check-balance": "tsx src/check-balance.ts",
-    "generate-session": "tsx src/generate.ts"
+    "start": "node --env-file=.env dist/bot.js",
+    "test": "tsx --env-file=.env src/test-suite.ts",
+    "list-channels": "tsx --env-file=.env src/list-channels.ts",
+    "list-profiles": "tsx --env-file=.env src/list-profiles.ts",
+    "check-balance": "tsx --env-file=.env src/check-balance.ts",
+    "generate-session": "tsx --env-file=.env src/generate.ts"
   },
   "keywords": [
     "telegram",
@@ -25,15 +25,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dotenv": "^16.4.7",
-    "input": "^1.0.1",
     "playwright": "^1.50.1",
-    "serve-static": "^2.2.1",
     "telegram": "^2.26.16"
   },
   "devDependencies": {
     "@types/node": "^22.13.5",
-    "@types/serve-static": "^2.2.0",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }

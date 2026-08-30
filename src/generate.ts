@@ -1,11 +1,18 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
-import input from 'input';
-import dotenv from 'dotenv';
+import * as readline from 'node:readline/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 
-dotenv.config();
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+async function prompt(query: string, defaultVal: string = ''): Promise<string> {
+  const ans = await rl.question(query);
+  return ans.trim() || defaultVal;
+}
 
 /**
  * Interactive Session String Generator for GramJS UserBot
@@ -19,17 +26,13 @@ async function generateSession(): Promise<void> {
   let apiHash = process.env.API_HASH?.trim();
 
   if (!apiIdStr) {
-    const inputApiId = await input.text(`Enter API_ID [default: ${apiIdStr || ''}]: `);
-    if (inputApiId.trim()) {
-      apiIdStr = inputApiId.trim();
-    }
+    const inputApiId = await prompt(`Enter API_ID [default: ${apiIdStr || ''}]: `, apiIdStr);
+    if (inputApiId) apiIdStr = inputApiId;
   }
 
   if (!apiHash) {
-    const inputApiHash = await input.text(`Enter API_HASH [default: ${apiHash || ''}]: `);
-    if (inputApiHash.trim()) {
-      apiHash = inputApiHash.trim();
-    }
+    const inputApiHash = await prompt(`Enter API_HASH [default: ${apiHash || ''}]: `, apiHash);
+    if (inputApiHash) apiHash = inputApiHash;
   }
 
   const apiId = Number.parseInt(apiIdStr!, 10);
@@ -45,9 +48,9 @@ async function generateSession(): Promise<void> {
   });
 
   await client.start({
-    phoneNumber: async () => await input.text('📱 Enter your phone number (with country code, e.g. +1234567890): '),
-    password: async () => await input.password('🔒 Enter your Telegram 2FA password (leave empty if none): '),
-    phoneCode: async () => await input.text('✉️  Enter the Telegram login code you just received: '),
+    phoneNumber: async () => await prompt('📱 Enter your phone number (with country code, e.g. +1234567890): '),
+    password: async () => await prompt('🔑 Enter your Telegram 2FA password (leave empty if none): '),
+    phoneCode: async () => await prompt('💬 Enter the Telegram login code you just received: '),
     onError: (err) => console.error('Authentication error:', err),
   });
 
@@ -60,9 +63,8 @@ async function generateSession(): Promise<void> {
   console.log(savedSession);
   console.log('\n====================================================');
 
-  const shouldSave = await input.confirm('Do you want to automatically save this to your .env file? ', {
-    default: true,
-  });
+  const shouldSaveRaw = await prompt('Do you want to automatically save this to your .env file? (Y/n) ', 'y');
+  const shouldSave = shouldSaveRaw.toLowerCase() === 'y';
 
   if (shouldSave) {
     const envPath = path.resolve(process.cwd(), '.env');
@@ -83,6 +85,7 @@ async function generateSession(): Promise<void> {
   }
 
   await client.disconnect();
+  rl.close();
   console.log('\nDone! You can now start the bot with: npm run dev');
   process.exit(0);
 }

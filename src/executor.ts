@@ -508,15 +508,7 @@ async function readActiveMarketFromDOM(page: Page): Promise<string | null> {
       // 1. Primary: Check active tab in top tab bar
       const activeTabSelectors = [
         '#tab-active', // Golden standard for modern Quotex active tab
-        '.header-sub__tab--active',
-        '.tab--active',
-        '.tab.active',
-        '.tabs__item--active',
-        '.tabs__item.active',
         '[class*="tab--active"]',
-        '[class*="tabs__item--active"]',
-        '[class*="active-tab"]',
-        '.assets-table__item--active',
         '[aria-selected="true"]',
       ];
 
@@ -577,58 +569,20 @@ async function switchViaOpenTab(page: Page, targetTicker: string): Promise<boole
     const targetCanon = canonicalize(targetTicker);
     if (!targetCanon) return false;
 
-    const result = await page.evaluate(
-      ({ targetCanon }) => {
-        function canon(s: string): string {
-          return s
-            .replace(/\+?\d{1,3}\s*%/g, '')
-            .toUpperCase()
-            .replace(/\bOTC\b/g, '')
-            .replace(/[^A-Z0-9]/g, '');
-        }
+    // Ponytail mode: Keep it simple. Use native Playwright locators.
+    // Target the specific container (.OK1xf or .Q02Z1), find the element with matching data-symbol, 
+    // and specifically target the market name text container (.WRocw).
+    const tabNameLocator = page.locator(`.OK1xf [data-symbol*="${targetCanon}" i] .WRocw, .Q02Z1 [data-symbol*="${targetCanon}" i] .WRocw`).first();
 
-        // Find tabs strictly within the specific container provided by the user
-        const tabs = document.querySelectorAll('.OK1xf .Q02Z1 [data-symbol], .Q02Z1 [data-symbol], .OK1xf [data-symbol]');
-        
-        for (const tab of tabs) {
-          // Look at the inner text container specifically
-          const nameContainer = tab.querySelector('.WRocw') || tab;
-          const text = (nameContainer.textContent || '').trim();
-          if (!text || text.toLowerCase().includes('deposit')) continue;
-
-          const tabCanon = canon(text);
-          if (tabCanon === targetCanon || (tabCanon.length >= 4 && (tabCanon.includes(targetCanon) || targetCanon.includes(tabCanon)))) {
-            
-            const isAlreadyActive = tab.id === 'tab-active' || tab.classList.contains('active') || tab.getAttribute('aria-selected') === 'true';
-            
-            if (!isAlreadyActive) {
-               // Dispatch standard synthetic events on the main wrapper
-               const clickTarget = tab as HTMLElement;
-               clickTarget.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
-               clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-               clickTarget.click();
-               clickTarget.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true }));
-               clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-            }
-            
-            return { matched: true, alreadyActive: isAlreadyActive };
-          }
-        }
-        return { matched: false, alreadyActive: false };
-      },
-      { targetCanon }
-    );
-
-    if (result.matched) {
-      if (result.alreadyActive) {
-        logger.browser(`⚡ Market "${targetTicker}" is already active in top tab bar.`);
-      } else {
-        logger.browser(`⚡ Switched to "${targetTicker}" instantly via open tab.`);
-        await page.waitForTimeout(200);
-      }
+    if (await tabNameLocator.isVisible({ timeout: 500 }).catch(() => false)) {
+      // Playwright's native click handles scrolling, actionability checks, and dispatches trusted events automatically.
+      await tabNameLocator.click();
+      logger.browser(`⚡ Switched to "${targetTicker}" instantly via open tab.`);
+      await page.waitForTimeout(200);
       setActiveMarket(targetTicker);
       return true;
     }
+    
     return false;
   } catch (error) {
     logger.warn('⚠️ Error in switchViaOpenTab:', error);
@@ -799,7 +753,7 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
 
         const candidates = document.querySelectorAll(
           'li, a, tr, [class*="item"], [class*="pair"], [class*="asset"], ' +
-          '[class*="result"], [class*="option"], [role="option"], [role="row"], button, div.tab'
+          '[class*="result"], [class*="option"], [role="option"], [role="row"], button'
         );
 
         let bestEl: HTMLElement | null = null;

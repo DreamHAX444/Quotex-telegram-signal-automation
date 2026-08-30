@@ -1,9 +1,6 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
-import dotenv from 'dotenv';
 import { config } from './config.js';
-
-dotenv.config();
 
 /**
  * CLI Tool to list all Telegram dialogs, channels, and supergroups

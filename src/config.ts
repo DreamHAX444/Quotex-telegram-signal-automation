@@ -1,11 +1,7 @@
-import dotenv from 'dotenv';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { AppConfig } from './types.js';
 import { logger } from './logger.js';
-
-// Load environment variables from .env file
-dotenv.config();
 
 export function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
   const trimmed = raw.trim();

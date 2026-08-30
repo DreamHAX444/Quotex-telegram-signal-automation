@@ -306,7 +306,7 @@ async function ensurePageOnTarget(page: Page): Promise<void> {
     try {
       const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
       if (fs.existsSync(settingsPath)) {
-        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        const settings = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
         if (settings.defaultAccount === 'Live' || settings.defaultAccount === 'Demo') {
           defaultAccount = settings.defaultAccount;
         }
@@ -376,7 +376,7 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
           const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
           let defaultAccount: 'Live' | 'Demo' = 'Live';
           if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const settings = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
             if (settings.defaultAccount === 'Live' || settings.defaultAccount === 'Demo') {
               defaultAccount = settings.defaultAccount;
             }

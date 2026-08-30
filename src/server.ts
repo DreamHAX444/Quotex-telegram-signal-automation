@@ -6,6 +6,8 @@ import { logger } from './logger.js';
 import { balanceManager } from './balance.js';
 import { fetchLiveBalance, executeAutomation } from './executor.js';
 import { config, updateVipChannelId } from './config.js';
+import { automationQueue } from './queue.js';
+import type { ActionType } from './types.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -74,7 +76,7 @@ export function startDashboardServer(port = PORT) {
     const parsedUrl = new URL(req.url || '/', `http://localhost:${port}`);
     const pathname = parsedUrl.pathname;
 
-    const jsonResponse = (status: number, data: any) => {
+    const jsonResponse = (status: number, data: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     };
@@ -96,21 +98,25 @@ export function startDashboardServer(port = PORT) {
           history: balanceManager.getBalanceHistory(),
         });
       } else if (pathname === '/api/switch-account' && req.method === 'POST') {
-        const data = (await parseJsonBody(req)) as Record<string, any>;
+        const data = (await parseJsonBody(req)) as { activeType?: string };
         const type = data.activeType;
         if (type !== 'Live' && type !== 'Demo') {
           return jsonResponse(400, { success: false, error: 'Invalid account type' });
         }
         
-        const result = await executeAutomation({
-          action: type === 'Live' ? 'SWITCH_LIVE' : 'SWITCH_DEMO',
-          ticker: '',
-          rawText: `Switching to ${type} via Dashboard`,
-          timestamp: new Date()
-        });
+        const result = await automationQueue.enqueue({
+          id: 'dash-' + Date.now(),
+          signal: {
+            action: (type === 'Live' ? 'SWITCH_LIVE' : 'SWITCH_DEMO') as ActionType,
+            ticker: '',
+            rawText: `Switching to ${type} via Dashboard`,
+            timestamp: new Date()
+          },
+          receivedAt: new Date()
+        }, executeAutomation);
         jsonResponse(200, { success: result.success });
       } else if (pathname === '/api/settings/default-account' && req.method === 'POST') {
-        const data = (await parseJsonBody(req)) as Record<string, any>;
+        const data = (await parseJsonBody(req)) as { defaultType?: string };
         const type = data.defaultType;
         if (type === 'Live' || type === 'Demo') {
           const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
@@ -120,7 +126,7 @@ export function startDashboardServer(port = PORT) {
       } else if (pathname === '/api/channel' && req.method === 'GET') {
         jsonResponse(200, { currentChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/channel/switch' && req.method === 'POST') {
-        const data = (await parseJsonBody(req)) as Record<string, any>;
+        const data = (await parseJsonBody(req)) as { channel?: string };
         if (!data.channel) {
           return jsonResponse(400, { success: false, error: 'Missing channel ID' });
         }
@@ -131,7 +137,7 @@ export function startDashboardServer(port = PORT) {
         let settings = { defaultAccount: 'Demo' };
         if (fs.existsSync(settingsPath)) {
           try {
-            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const parsed = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
             if (parsed.defaultAccount === 'Live' || parsed.defaultAccount === 'Demo') {
               settings.defaultAccount = parsed.defaultAccount;
             }

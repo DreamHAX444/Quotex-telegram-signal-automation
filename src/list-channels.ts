@@ -39,7 +39,7 @@ async function listChannels(): Promise<void> {
 
     for (const d of dialogs) {
       if (d.isChannel || d.isGroup) {
-        const entity = d.entity as Record<string, any>;
+        const entity = d.entity as unknown as { id?: { toString: () => string } | string | number; broadcast?: boolean; megagroup?: boolean; title?: string; username?: string };
         let rawId = '';
         let botApiId = '';
 

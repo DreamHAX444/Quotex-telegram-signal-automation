@@ -96,17 +96,32 @@ function App() {
     };
   }, []);
 
-  const handleActiveChange = (type: string) => {
+  const handleActiveChange = async (type: string) => {
     setAccountType(type);
-    fetchBalance(false);
+    try {
+      await api.setActiveAccount(type as 'Live' | 'Demo');
+      await fetchBalance(false);
+    } catch (e) {
+      console.error('Failed to set active account', e);
+    }
   };
 
-  const handleDefaultChange = (type: string) => {
+  const handleDefaultChange = async (type: string) => {
     setDefaultAccount(type);
+    try {
+      await api.setStartupDefault(type as 'Live' | 'Demo');
+    } catch (e) {
+      console.error('Failed to set default account', e);
+    }
   };
 
-  const handleChannelChange = (channelId: string) => {
+  const handleChannelChange = async (channelId: string) => {
     setActiveChannel(channelId);
+    try {
+      await api.setActiveChannel(channelId);
+    } catch (e) {
+      console.error('Failed to set active channel', e);
+    }
   };
 
   const handleClearLogs = () => {

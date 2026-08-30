@@ -21,6 +21,7 @@ async function parseJsonBody(req: http.IncomingMessage): Promise<unknown> {
         reject(new Error('Payload too large'));
       }
     });
+    req.on('error', reject);
     req.on('end', () => {
       try {
         resolve(JSON.parse(body));
@@ -48,7 +49,7 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
   
   const ext = path.parse(pathname).ext;
   const baseDir = path.join(process.cwd(), 'frontend', 'dist');
-  const filePath = path.resolve(baseDir, pathname.replace(/^\/+/, ''));
+  const filePath = path.normalize(path.resolve(baseDir, pathname.replace(/^\/+/, '')));
   
   if (!filePath.startsWith(baseDir)) {
     res.writeHead(403);
@@ -69,8 +70,10 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
 
 export function startDashboardServer(port = PORT) {
   const server = http.createServer(async (req, res) => {
-    // Add CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS: restrict to localhost origins (dashboard runs on same host)
+    const origin = req.headers.origin || '';
+    const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : '';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -154,8 +157,12 @@ export function startDashboardServer(port = PORT) {
         jsonResponse(200, { currentChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/channel/switch' && req.method === 'POST') {
         const data = (await parseJsonBody(req)) as { channel?: string };
-        if (!data.channel) {
+        if (!data.channel || typeof data.channel !== 'string') {
           return jsonResponse(400, { success: false, error: 'Missing channel ID' });
+        }
+        // Validate: channel ID must be numeric (optionally prefixed with -)
+        if (!/^-?\d{5,20}$/.test(data.channel.trim())) {
+          return jsonResponse(400, { success: false, error: 'Invalid channel ID format' });
         }
         await updateVipChannelId(data.channel);
         jsonResponse(200, { success: true, newChannel: config.vipChannelIdRaw });

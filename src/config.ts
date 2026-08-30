@@ -103,7 +103,7 @@ function validateAndLoadConfig(): AppConfig {
   };
 }
 
-export const config = validateAndLoadConfig();
+export let config = validateAndLoadConfig();
 
 export async function updateVipChannelId(newChannelId: string) {
   const { raw, bigIntVal } = parseChannelId(newChannelId);

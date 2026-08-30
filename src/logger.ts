@@ -4,6 +4,7 @@
 import { EventEmitter } from 'node:events';
 
 export const logEmitter = new EventEmitter();
+logEmitter.setMaxListeners(0); // Multiple SSE clients may subscribe simultaneously
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'QUEUE' | 'BROWSER' | 'TELEGRAM';
 

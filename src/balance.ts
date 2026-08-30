@@ -238,13 +238,13 @@ export async function extractBalanceFromPage(page: Page): Promise<AccountBalance
     });
 
     if (!rawData || !rawData.rawBalance) {
-      logger.debug('Balance elements not detected on active page.');
+      logger.debug('Balance elements not detected on active page. Ensure the user is logged in and the page is fully loaded.');
       return null;
     }
 
     const parsed = parseCurrencyAndNumber(rawData.rawBalance);
     if (!parsed) {
-      logger.debug(`Could not parse monetary numbers from "${rawData.rawBalance}"`);
+      logger.debug(`Could not parse monetary numbers from string: "${rawData.rawBalance}". Check currency symbols.`);
       return null;
     }
 

@@ -37,6 +37,9 @@ class AutomationQueue {
       logger.queue(`Executing queued task [${task.id}]`);
       try {
         return await runner(task.signal);
+      } catch (err: any) {
+        logger.error(`Task [${task.id}] runner threw exception`, err);
+        return { success: false, signal: task.signal, durationMs: 0, error: err?.message || String(err) };
       } finally {
         this.pendingCount--;
         if (this.pendingCount === 0) {

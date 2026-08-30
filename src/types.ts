@@ -28,7 +28,7 @@ export interface AccountBalance {
 
 export interface BalanceHistoryEntry {
   timestamp: string;
-  accountType: string;
+  accountType: 'Live' | 'Demo' | 'Unknown';
   formattedBalance: string;
   numericValue: number;
   currency: string;

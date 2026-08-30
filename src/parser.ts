@@ -626,5 +626,3 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
   );
   return null;
 }
-
-

@@ -267,9 +267,14 @@ function processMessage(message: any): void {
       return; // Strictly drop duplicates from event + polling races
     }
     processedMessageIdSet.add(messageKey);
+    // Amortized eviction: batch-remove oldest entries when set grows too large
     if (processedMessageIdSet.size > 2000) {
-      const first = processedMessageIdSet.values().next().value;
-      if (first) processedMessageIdSet.delete(first);
+      const iter = processedMessageIdSet.values();
+      for (let i = 0; i < 500; i++) {
+        const entry = iter.next();
+        if (entry.done) break;
+        processedMessageIdSet.delete(entry.value);
+      }
     }
     lastProcessedMessageIds.set(currentChannelStr, message.id);
   }
@@ -408,8 +413,10 @@ function startActivePolling(): void {
   }
 
   // Kick off the recursive poll
-  poll();
+  pollTimerRef = setTimeout(poll, 0);
 }
+
+let pollTimerRef: NodeJS.Timeout | undefined;
 
 /**
  * Graceful Teardown Lifecycle Handler
@@ -422,15 +429,21 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   logger.info(`Received ${signal}. Initiating graceful shutdown...`);
 
+  // 0. Stop polling timer
+  if (pollTimerRef) clearTimeout(pollTimerRef);
+
   // 1. Pause incoming tasks and wait for active task to drain
   automationQueue.pause();
   logger.info('Waiting for pending tasks in queue to finish...');
   await automationQueue.onIdle();
 
-  // 2. Clean up any active warm browser session
+  // 2. Stop keepAlive interval
+  if (keepAliveIntervalRef) clearInterval(keepAliveIntervalRef);
+
+  // 3. Clean up any active warm browser session
   await closeWarmBrowser();
 
-  // 3. Disconnect GramJS Client
+  // 4. Disconnect GramJS Client
   try {
     logger.info('Disconnecting GramJS Telegram client...');
     await client.disconnect();
@@ -442,6 +455,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   logger.info('Graceful shutdown completed successfully. Exiting.');
   process.exit(0);
 }
+
+let keepAliveIntervalRef: NodeJS.Timeout | undefined;
 
 // Register OS termination signal handlers
 process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
@@ -489,7 +504,7 @@ async function bootstrap(): Promise<void> {
     startActivePolling();
 
     // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
-    setInterval(async () => {
+    keepAliveIntervalRef = setInterval(async () => {
       if (isShuttingDown) return;
       
       let isActuallyConnected = false;

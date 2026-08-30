@@ -926,34 +926,30 @@ async function handlePrepareTrigger(signal: TradeSignal, startTime: number): Pro
   }
   const { page } = instance;
 
-  try {
-    await ensurePageOnTarget(page);
-    await page.bringToFront().catch(() => {});
+  await ensurePageOnTarget(page);
+  await page.bringToFront().catch(() => {});
 
-    // Read and log the current balance via the balance manager
-    let balance = await balanceManager.extractAndRecordBalance(page);
-    
-    const isGenericTicker =
-      !signal.ticker ||
-      ['ACTIVE', 'CURRENT', 'READY', 'STANDBY', 'ACCOUNT'].includes(signal.ticker.toUpperCase());
+  // Read and log the current balance via the balance manager
+  const balance = await balanceManager.extractAndRecordBalance(page);
+  
+  const isGenericTicker =
+    !signal.ticker ||
+    ['ACTIVE', 'CURRENT', 'READY', 'STANDBY', 'ACCOUNT'].includes(signal.ticker.toUpperCase());
 
-    if (!isGenericTicker) {
-      await selectMarket(page, signal.ticker);
-    }
-
-    const durationMs = Date.now() - startTime;
-    logger.browser(`✅ Cortex Browser is ready on standby for orders! (${durationMs}ms)`);
-
-    return {
-      success: true,
-      signal,
-      durationMs,
-      details: `Pre-warmed browser on ${config.targetUrl}`,
-      balance: balance || undefined,
-    };
-  } catch (error) {
-    throw error;
+  if (!isGenericTicker) {
+    await selectMarket(page, signal.ticker);
   }
+
+  const durationMs = Date.now() - startTime;
+  logger.browser(`✅ Cortex Browser is ready on standby for orders! (${durationMs}ms)`);
+
+  return {
+    success: true,
+    signal,
+    durationMs,
+    details: `Pre-warmed browser on ${config.targetUrl}`,
+    balance: balance || undefined,
+  };
 }
 
 /**
@@ -1124,7 +1120,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
   logger.browser(`Starting automation for [${signal.action} ${signal.ticker}]...`);
 
   // Watchdog timeout to prevent infinite freezes (30 seconds)
-  let watchdogTimer: NodeJS.Timeout;
+  let watchdogTimer: NodeJS.Timeout | undefined;
   const watchdogPromise = new Promise<never>((_, reject) => {
     watchdogTimer = setTimeout(() => reject(new Error('WATCHDOG TIMEOUT: Task execution exceeded 30 seconds and was forcibly aborted.')), 30000);
   });
@@ -1252,7 +1248,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error(`Browser automation failed for [${signal.action} ${signal.ticker}]`, error);
 
-    if (page && !(page as Page).isClosed()) {
+    if (page && !page.isClosed()) {
       try {
         const timestamp = Date.now();
         const safeTicker = signal.ticker.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1260,7 +1256,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
           config.screenshotsDir,
           `err_${timestamp}_${signal.action}_${safeTicker}.png`
         );
-        await (page as Page).screenshot({ path: screenshotPath, fullPage: true });
+        await page.screenshot({ path: screenshotPath, fullPage: true });
         logger.error(`Captured error screenshot at: ${screenshotPath}`);
       } catch (screenshotError) {
         logger.error('Failed to capture failure screenshot', screenshotError);
@@ -1275,7 +1271,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
       error: errorMessage,
     };
   } finally {
-    clearTimeout(watchdogTimer!);
+    if (watchdogTimer) clearTimeout(watchdogTimer);
   }
 }
 

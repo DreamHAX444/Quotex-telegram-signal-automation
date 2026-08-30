@@ -18,31 +18,46 @@ export function AccountControls({ activeAccount, defaultAccount, activeChannel, 
   const handleActiveSwitch = async (type: 'Live' | 'Demo') => {
     if (activeAccount === type || switching) return;
     setSwitching(true);
-    const success = await api.setActiveAccount(type);
-    if (success) {
-      onActiveChange(type);
+    try {
+      const success = await api.setActiveAccount(type);
+      if (success) {
+        onActiveChange(type);
+      }
+    } catch (e) {
+      console.error('Failed to switch active account', e);
+    } finally {
+      setSwitching(false);
     }
-    setSwitching(false);
   };
 
   const handleDefaultSwitch = async (type: 'Live' | 'Demo') => {
     if (defaultAccount === type || defaultSwitching) return;
     setDefaultSwitching(true);
-    const success = await api.setStartupDefault(type);
-    if (success) {
-      onDefaultChange(type);
+    try {
+      const success = await api.setStartupDefault(type);
+      if (success) {
+        onDefaultChange(type);
+      }
+    } catch (e) {
+      console.error('Failed to switch default account', e);
+    } finally {
+      setDefaultSwitching(false);
     }
-    setDefaultSwitching(false);
   };
 
   const handleChannelSwitch = async (channelId: string) => {
     if (activeChannel === channelId || channelSwitching) return;
     setChannelSwitching(true);
-    const success = await api.setActiveChannel(channelId);
-    if (success) {
-      onChannelChange(channelId);
+    try {
+      const success = await api.setActiveChannel(channelId);
+      if (success) {
+        onChannelChange(channelId);
+      }
+    } catch (e) {
+      console.error('Failed to switch active channel', e);
+    } finally {
+      setChannelSwitching(false);
     }
-    setChannelSwitching(false);
   };
 
   return (

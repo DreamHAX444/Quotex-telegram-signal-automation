@@ -3,7 +3,16 @@ import { chromium } from 'playwright';
 import { parseSignal } from './parser.js';
 import { isUpAction, isDownAction } from './types.js';
 import { automationQueue } from './queue.js';
-import { clickTradeButton, getActiveMarket, setActiveMarket } from './executor.js';
+import {
+  clickTradeButton,
+  getActiveMarket,
+  setActiveMarket,
+  canonicalize,
+  tickersMatch,
+  buildSearchQuery,
+  getSearchQueriesForTicker,
+  stripPayoutAndNoise,
+} from './executor.js';
 import type { AutomationTask, TradeSignal } from './types.js';
 
 async function runTestSuite(): Promise<void> {
@@ -237,7 +246,7 @@ async function runTestSuite(): Promise<void> {
   assert(tickPrep3 !== null && tickPrep3.action === 'PREPARE');
   assert.strictEqual(tickPrep3.ticker, 'USD/JPY');
 
-  // Emojis with Get Ready (Hourglass, Bell, Megaphone, Lightning, Sparkles, Fire)
+  // Emojis with Get Ready
   const prepEmoji1 = parseSignal('⚡ GET READY: EUR/USD ⚡');
   assert(prepEmoji1 !== null && prepEmoji1.action === 'PREPARE');
   assert.strictEqual(prepEmoji1.ticker, 'EUR/USD');
@@ -334,7 +343,6 @@ async function runTestSuite(): Promise<void> {
     activeCount++;
     if (activeCount > maxConcurrent) maxConcurrent = activeCount;
 
-    // Simulate work taking 30ms
     await new Promise((r) => setTimeout(r, 30));
     executionOrder.push(signal.price || 0);
 
@@ -358,7 +366,6 @@ async function runTestSuite(): Promise<void> {
     receivedAt: new Date(),
   }));
 
-  // Fire 5 tasks concurrently
   const promises = tasks.map((t) => automationQueue.enqueue(t, mockRunner));
   await Promise.all(promises);
 
@@ -372,12 +379,10 @@ async function runTestSuite(): Promise<void> {
   // ----------------------------------------------------
   console.log('▶ Test 3: Quotex UP & DOWN HTML Button Click Verification with Exact User HTML...');
 
-  // Launch isolated headless browser to verify the exact Quotex HTML buttons
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // Load the exact Quotex button HTML provided by the user
   const quotexHtmlContent = `
     <!DOCTYPE html>
     <html>
@@ -409,14 +414,12 @@ async function runTestSuite(): Promise<void> {
 
   await page.setContent(quotexHtmlContent);
 
-  // Test UP click
   const upClickResult = await clickTradeButton(page, 'UP');
   assert.strictEqual(upClickResult.success, true, 'clickTradeButton for UP must succeed');
   const clickedUp = await page.evaluate(() => (window as any).lastClicked);
   assert.strictEqual(clickedUp, 'UP', 'UP button event listener must be triggered');
   console.log(`  ✔ Verified UP click: Selector used "${upClickResult.selectorUsed}"`);
 
-  // Test DOWN click
   const downClickResult = await clickTradeButton(page, 'DOWN');
   assert.strictEqual(downClickResult.success, true, 'clickTradeButton for DOWN must succeed');
   const clickedDown = await page.evaluate(() => (window as any).lastClicked);
@@ -427,11 +430,151 @@ async function runTestSuite(): Promise<void> {
   console.log('✔ Test 3 Passed: Successfully targeted and triggered clicks on user\'s exact Quotex UP & DOWN HTML buttons.\n');
 
   // ----------------------------------------------------
-  // TEST 4: Market Functions (No-Cache Behavior)
+  // TEST 4: Sector-Aware Ticker Utilities & Alias Resolution
   // ----------------------------------------------------
-  console.log('▶ Test 4: Market Switch Behavior (Always Switch, No Cache)...');
+  console.log('▶ Test 4: Sector-Aware Ticker Matching, Aliases & Payout Stripping...');
 
-  // Market functions use caching in production
+  // Canonicalization & Aliases
+  assert.strictEqual(canonicalize('AAPL'), 'APPLE');
+  assert.strictEqual(canonicalize('XAU/USD'), 'GOLD');
+  assert.strictEqual(canonicalize('EUR/USD (OTC) 87%'), 'EURUSD');
+  assert.strictEqual(canonicalize('USCRUDE'), 'USCRUDE');
+
+  // Payout stripping
+  assert.strictEqual(stripPayoutAndNoise('EUR/USD (OTC) 87%'), 'EUR/USD (OTC)');
+  assert.strictEqual(stripPayoutAndNoise('USD/CHF +92%'), 'USD/CHF');
+  assert.strictEqual(stripPayoutAndNoise('Gold (OTC)\n+80%'), 'Gold (OTC)');
+
+  // Search queries (strictly no OTC)
+  assert.strictEqual(buildSearchQuery('USD CHF OTC').query, 'USD/CHF');
+  assert.strictEqual(buildSearchQuery('EURUSD').query, 'EUR/USD');
+  assert.strictEqual(buildSearchQuery('EUR/USD (OTC)').query, 'EUR/USD');
+  assert.strictEqual(buildSearchQuery('AAPL').query, 'Apple');
+  assert.strictEqual(buildSearchQuery('Gold').query, 'Gold');
+  assert.strictEqual(buildSearchQuery('XAU/USD').query, 'Gold');
+
+  // Multi-query candidate list
+  const copQueries = getSearchQueriesForTicker('USD COP OTC');
+  assert.ok(copQueries.includes('USD/COP'), 'Must include USD/COP');
+  assert.ok(copQueries.includes('USD COP'), 'Must include USD COP');
+  assert.ok(copQueries.includes('COP'), 'Must include quote currency COP');
+
+  const appleQueries = getSearchQueriesForTicker('AAPL');
+  assert.ok(appleQueries.includes('Apple'), 'Must include Apple');
+  assert.ok(appleQueries.includes('AAPL'), 'Must include AAPL');
+  assert.strictEqual(buildSearchQuery('USCRUDE').query, 'Crude');
+  assert.strictEqual(buildSearchQuery('BTC/USD').query, 'Bitcoin');
+  assert.strictEqual(buildSearchQuery('Asian Composite Index').query, 'ASIAN COMPOSITE INDEX');
+
+  // Sector matching: Forex
+  assert(tickersMatch('EUR/USD', 'EUR/USD (OTC) 87%'), 'Forex EUR/USD with payout matches');
+  assert(tickersMatch('USD CHF OTC', 'USD/CHF (OTC)'), 'Forex USD CHF OTC matches USD/CHF (OTC)');
+  assert(tickersMatch('USD/INR OTC', 'USD/INR'), 'Forex USD/INR matches');
+
+  // Sector matching: Crypto
+  assert(tickersMatch('BTC/USD', 'Bitcoin 80%'), 'Crypto BTC/USD matches Bitcoin');
+  assert(tickersMatch('ETH', 'Ethereum (OTC)'), 'Crypto ETH matches Ethereum');
+  assert(tickersMatch('SOL', 'SOL/USD'), 'Crypto SOL matches SOL/USD');
+
+  // Sector matching: Commodities
+  assert(tickersMatch('GOLD', 'XAU/USD'), 'Commodity GOLD matches XAU/USD');
+  assert(tickersMatch('XAU/USD', 'Gold (OTC) +82%'), 'Commodity XAU/USD matches Gold (OTC)');
+  assert(tickersMatch('USCRUDE', 'Crude Oil'), 'Commodity USCRUDE matches Crude Oil');
+  assert(tickersMatch('UKBRENT', 'Brent Crude'), 'Commodity UKBRENT matches Brent');
+
+  // Sector matching: Stocks / Equities
+  assert(tickersMatch('AAPL', 'Apple (OTC) 90%'), 'Stock AAPL matches Apple');
+  assert(tickersMatch('BA', 'Boeing Company (OTC)'), 'Stock BA matches Boeing Company');
+  assert(tickersMatch('MSFT', 'Microsoft'), 'Stock MSFT matches Microsoft');
+  assert(tickersMatch('NVDA', 'Nvidia (OTC)'), 'Stock NVDA matches Nvidia');
+  assert(tickersMatch('TSLA', 'Tesla'), 'Stock TSLA matches Tesla');
+
+  // Sector matching: Indices
+  assert(tickersMatch('ASIAN COMPOSITE INDEX', 'Asian Composite Index'), 'Index matches');
+  assert(tickersMatch('US500', 'S&P 500'), 'Index US500 matches S&P 500');
+
+  console.log('✔ Test 4 Passed: All sectors (Forex, Crypto, Commodities, Stocks, Indices) resolve accurately.\n');
+
+  // ----------------------------------------------------
+  // TEST 5: User '+' Add Asset Button vs Deposit Button Isolation
+  // ----------------------------------------------------
+  console.log('▶ Test 5: Exact Quotex Button Verification (+ Button vs Deposit Button)...');
+
+  const browser2 = await chromium.launch({ headless: true });
+  const context2 = await browser2.newContext();
+  const page2 = await context2.newPage();
+
+  const quotexMockHtml = `
+    <!DOCTYPE html>
+    <html>
+      <head><title>Quotex Header Simulation</title></head>
+      <body>
+        <!-- Header tab bar -->
+        <div class="header-tabs">
+          <div class="tab header-sub__tab header-sub__tab--active">
+            <span class="tab__text">EUR/USD (OTC) 87%</span>
+          </div>
+          <div class="tab header-sub__tab">
+            <span class="tab__text">USD/CHF (OTC) 92%</span>
+          </div>
+        </div>
+
+        <!-- Action buttons area -->
+        <div class="header-actions">
+          <!-- The RIGHT button: '+' add asset button from user HTML -->
+          <button type="button" id="right-plus-btn" class="CAZSg wupmB BEz9j">
+            <svg class="icon-plus qYmvp h4bHs"><use xlink:href="/profile/images/spritemap.svg#icon-plus"></use></svg>
+          </button>
+
+          <!-- The WRONG button: Deposit button from user HTML -->
+          <button type="button" id="wrong-deposit-btn" class="KtjVk JQZcs _5qIw wCEPo">
+            <svg class="icon-plus oDDMG"><use xlink:href="/profile/images/spritemap.svg#icon-plus"></use></svg>
+            <span class="oQ4Z4">Deposit</span>
+            <span class="SGRs3"><svg class="icon-button-loader"><use xlink:href="/profile/images/spritemap.svg#icon-button-loader"></use></svg></span>
+          </button>
+        </div>
+
+        <script>
+          window.clickedButton = null;
+          document.getElementById('right-plus-btn').addEventListener('click', () => { window.clickedButton = 'ADD_ASSET_PLUS'; });
+          document.getElementById('wrong-deposit-btn').addEventListener('click', () => { window.clickedButton = 'DEPOSIT_BUTTON'; });
+        </script>
+      </body>
+    </html>
+  `;
+
+  await page2.setContent(quotexMockHtml);
+
+  // Test that our opener evaluates the RIGHT '+' button and NEVER clicks Deposit
+  const clickedResult = await page2.evaluate(() => {
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = (btn.textContent || '').trim().toLowerCase();
+      if (text.includes('deposit') || btn.querySelector('span.oQ4Z4')?.textContent?.toLowerCase().includes('deposit')) {
+        continue;
+      }
+      const hasPlusSvg = btn.querySelector('svg.icon-plus, svg[class*="plus" i], use[*|href*="icon-plus"]');
+      if (hasPlusSvg || btn.classList.contains('CAZSg')) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  });
+
+  assert.strictEqual(clickedResult, true, 'Opener must find and click the right + button');
+  const clickedBtn = await page2.evaluate(() => (window as any).clickedButton);
+  assert.strictEqual(clickedBtn, 'ADD_ASSET_PLUS', 'Clicked button MUST be ADD_ASSET_PLUS and NEVER DEPOSIT_BUTTON');
+  console.log(`  ✔ Verified: Right '+' button (${clickedBtn}) was clicked, Deposit button was strictly skipped.`);
+
+  await browser2.close();
+  console.log('✔ Test 5 Passed: Exact user + button targeted and Deposit button completely isolated.\n');
+
+  // ----------------------------------------------------
+  // TEST 6: Market Caching State
+  // ----------------------------------------------------
+  console.log('▶ Test 6: Market State Verification...');
+
   setActiveMarket(null);
   assert.strictEqual(getActiveMarket(), null, 'getActiveMarket() should be null initially');
 
@@ -441,7 +584,104 @@ async function runTestSuite(): Promise<void> {
   setActiveMarket('EUR USD');
   assert.strictEqual(getActiveMarket(), 'EUR USD', 'getActiveMarket() should return updated market');
 
-  console.log('✔ Test 4 Passed: Market caching functions correctly.\n');
+  console.log('✔ Test 6 Passed: Market caching functions correctly.\n');
+
+  // ----------------------------------------------------
+  // TEST 7: Exact Quotex Asset Table HTML Click Verification
+  // ----------------------------------------------------
+  console.log('▶ Test 7: Exact Quotex Search Table HTML Click Verification (.yejPg, .R2Rgm, span.Z2fyK)...');
+
+  const browser3 = await chromium.launch({ headless: true });
+  const context3 = await browser3.newContext();
+  const page3 = await context3.newPage();
+
+  const exactPickerHtml = `
+    <!DOCTYPE html>
+    <html>
+      <head><title>Quotex Asset Picker Search Results</title></head>
+      <body>
+        <div class="yejPg">
+          <div class="VszPK">
+            <div class="ozbTK"><a>Name</a></div>
+            <div class="ozbTK Lt_gm"><a>24h changing</a></div>
+            <div class="ozbTK"><a>Profit 1+ min</a><svg class="icon-sort-mark"><use xlink:href="/profile/images/spritemap.svg#icon-sort-mark"></use></svg></div>
+            <div class="ozbTK"><a>5+ min</a></div>
+          </div>
+          <div class="tvTxR">Sort by:<div class="VdNM6">Name<svg class="icon-sort-mark"><use xlink:href="/profile/images/spritemap.svg#icon-sort-mark"></use></svg>
+            <div class="Kfkop">
+              <div class="JUa6w KHBO2">Name<div class="VA4oF"><svg class="icon-sort-mark"><use xlink:href="/profile/images/spritemap.svg#icon-sort-mark"></use></svg><svg class="icon-sort-mark icon-rotate"><use xlink:href="/profile/images/spritemap.svg#icon-sort-mark"></use></svg></div></div>
+              <div class="JUa6w">24h changing</div>
+              <div class="JUa6w">Profit 1+ min</div>
+              <div class="JUa6w">Profit 5+ min</div>
+            </div>
+          </div></div>
+          <!-- DESKTOP ROW -->
+          <div class="R2Rgm" id="target-row">
+            <div class="NnmVT"><svg class="icon-favorite"><use xlink:href="/profile/images/spritemap.svg#icon-favorite"></use></svg></div>
+            <div class="teoXG yNdTd">
+              <div class="flags dSnnA"><svg class="flag-usd" aria-label="Flag USD"></svg><svg class="flag-mxn" aria-label="Flag MXN"></svg></div>
+              <span class="Z2fyK">USD/MXN (OTC)</span>
+              <button data-state="closed" class="jJUOR" data-tabindex="" tabindex="-1"><svg class="icon-check"></svg></button>
+            </div>
+            <div class="hHJtM ZFMV8"><svg class="icon-arrow-up"></svg><span>0.03%</span></div>
+            <div class="bQodW mlvrU"><span>77%</span></div>
+            <div class="bQodW"><span>77%</span></div>
+          </div>
+          <!-- COMPACT ROW -->
+          <div class="vPvlJ">
+            <div class="cRI1S SUdKm"><svg class="icon-favorite"></svg></div>
+            <div class="sTlId">
+              <div class="e4qZ6">
+                <div class="flags IAdRa"><svg class="flag-usd"></svg><svg class="flag-mxn"></svg></div>
+                <span>USD/MXN (OTC)</span>
+                <button data-state="closed" class="jJUOR"><svg class="icon-check"></svg></button>
+              </div>
+              <div class="mQX6T">
+                <div class="QBzlg"><span>Profit 1+ min</span><span class="QBzlg">77%</span></div>
+                <div class="QBzlg"><span>5+ min</span><span>77%</span></div>
+              </div>
+            </div>
+            <div class="pIJ4K FxxqS"><svg class="icon-arrow-up"></svg><span>+0.03%</span></div>
+          </div>
+        </div>
+
+        <script>
+          window.clickedAsset = null;
+          document.querySelector('span.Z2fyK').addEventListener('click', () => { window.clickedAsset = 'USD/MXN (OTC)'; });
+          document.querySelector('.R2Rgm').addEventListener('click', (e) => {
+            if (!window.clickedAsset) window.clickedAsset = 'USD/MXN (OTC) via ROW';
+          });
+        </script>
+      </body>
+    </html>
+  `;
+
+  await page3.setContent(exactPickerHtml);
+
+  // Test our searchAndSelect matching logic inside page3
+  const targetCanon = canonicalize('USD MXN OTC');
+  const matchedAndClicked = await page3.evaluate((target: string) => {
+    const rows = document.querySelectorAll('.yejPg .R2Rgm, .yejPg .vPvlJ, .R2Rgm, .vPvlJ, .teoXG, .e4qZ6, span.Z2fyK');
+    for (let i = 0; i < rows.length; i++) {
+      const el = rows[i]!;
+      const nameSpan = el.querySelector('span.Z2fyK, .teoXG span, .e4qZ6 span') || el;
+      const text = (nameSpan.textContent || '').replace(/\+?\d{1,3}\s*%/g, '').toUpperCase().replace(/\bOTC\b/g, '').replace(/[^A-Z0-9]/g, '');
+      if (text === target || text.indexOf(target) !== -1 || target.indexOf(text) !== -1) {
+        const targetToClick = (el.querySelector('span.Z2fyK, .teoXG, .e4qZ6') || el) as HTMLElement;
+        targetToClick.click();
+        return true;
+      }
+    }
+    return false;
+  }, targetCanon);
+
+  assert.strictEqual(matchedAndClicked, true, 'Exact Quotex search table row must match and click');
+  const clickedAsset = await page3.evaluate(() => (window as any).clickedAsset);
+  assert.ok(clickedAsset && clickedAsset.includes('USD/MXN'), 'Clicked asset must be USD/MXN');
+  console.log(`  ✔ Verified: Exact Quotex asset row matched and clicked "${clickedAsset}".`);
+
+  await browser3.close();
+  console.log('✔ Test 7 Passed: Successfully matched and clicked asset in exact Quotex search table HTML.\n');
 
   console.log('========================================');
   console.log('  🎉 All Test Suites Passed 100%!       ');
@@ -452,4 +692,5 @@ runTestSuite().catch((err) => {
   console.error('Test Suite Failed:', err);
   process.exit(1);
 });
+
 

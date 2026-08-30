@@ -249,6 +249,7 @@ async function inspectTargetChannel(): Promise<void> {
 }
 
 
+const processedMessageIdSet = new Set<string>();
 const lastProcessedMessageIds = new Map<string, number>();
 
 /**
@@ -258,12 +259,17 @@ function processMessage(message: any): void {
   if (!message) return;
   
   const currentChannelStr = config.vipChannelIdBigInt.toString();
-  const lastProcessedMessageId = lastProcessedMessageIds.get(currentChannelStr) || 0;
   
-  if (message.id !== undefined && message.id <= lastProcessedMessageId && lastProcessedMessageId !== 0) return;
-
-  // Only update last processed ID if it's strictly greater or we're at start
-  if (message.id !== undefined && message.id > lastProcessedMessageId) {
+  if (message.id !== undefined) {
+    const messageKey = `${currentChannelStr}_${message.id}`;
+    if (processedMessageIdSet.has(messageKey)) {
+      return; // Strictly drop duplicates from event + polling races
+    }
+    processedMessageIdSet.add(messageKey);
+    if (processedMessageIdSet.size > 2000) {
+      const first = processedMessageIdSet.values().next().value;
+      if (first) processedMessageIdSet.delete(first);
+    }
     lastProcessedMessageIds.set(currentChannelStr, message.id);
   }
 

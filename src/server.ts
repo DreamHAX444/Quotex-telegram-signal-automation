@@ -1,7 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { logger } from './logger.js';
+import { logger, logEmitter } from './logger.js';
 
 import { balanceManager } from './balance.js';
 import { fetchLiveBalance, executeAutomation } from './executor.js';
@@ -47,7 +47,14 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
   if (pathname === '/') pathname = '/index.html';
   
   const ext = path.parse(pathname).ext;
-  const filePath = path.join(process.cwd(), 'frontend', 'dist', pathname);
+  const baseDir = path.join(process.cwd(), 'frontend', 'dist');
+  const filePath = path.resolve(baseDir, pathname.replace(/^\/+/, ''));
+  
+  if (!filePath.startsWith(baseDir)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
   
   fs.readFile(filePath, (err, data) => {
     if (err) {
@@ -82,7 +89,27 @@ export function startDashboardServer(port = PORT) {
     };
 
     try {
-      if (pathname === '/logs' || pathname === '/api/logs') {
+      if (pathname === '/api/logs/stream') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        
+        // Send initial state
+        res.write(`data: ${JSON.stringify({ type: 'initial', logs: logger.getLogs() })}\n\n`);
+        
+        const onLog = (entry: unknown) => {
+          res.write(`data: ${JSON.stringify({ type: 'new', log: entry })}\n\n`);
+        };
+        
+        logEmitter.on('log', onLog);
+        
+        req.on('close', () => {
+          logEmitter.off('log', onLog);
+        });
+        return;
+      } else if (pathname === '/logs' || pathname === '/api/logs') {
         jsonResponse(200, logger.getLogs());
       } else if (pathname === '/api/balance' || pathname === '/balance') {
         jsonResponse(200, {

@@ -1,6 +1,9 @@
 /**
  * Structured Timestamped Logger
  */
+import { EventEmitter } from 'node:events';
+
+export const logEmitter = new EventEmitter();
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'QUEUE' | 'BROWSER' | 'TELEGRAM';
 
@@ -39,10 +42,12 @@ function log(level: LogLevel, message: string, meta?: unknown): void {
     console.log(`${prefix} ${message}`);
   }
 
-  logHistory.push({ timestamp, level, message, meta: formattedMeta });
+  const entry = { timestamp, level, message, meta: formattedMeta };
+  logHistory.push(entry);
   if (logHistory.length > 500) {
     logHistory.shift();
   }
+  logEmitter.emit('log', entry);
 }
 
 export const logger = {

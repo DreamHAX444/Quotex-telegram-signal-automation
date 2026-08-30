@@ -57,31 +57,38 @@ function App() {
       setIsSyncing(false);
     }
   };
-
-  const fetchLogs = async () => {
-    try {
-      const data = await api.fetchLogs();
-      setLogs(data);
-      const d = new Date();
-      setLastLogUpdate(`Updated ${d.toLocaleTimeString('en-US', { hour12: false })}`);
-    } catch (e) {
-      console.error('Failed to fetch logs', e);
-    }
-  };
-
   useEffect(() => {
     // Initial fetch
     fetchSettings();
     fetchBalance(false);
-    fetchLogs();
+
+    // Logs SSE subscription
+    const eventSource = new EventSource('/api/logs/stream');
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'initial') {
+          setLogs(data.logs);
+        } else if (data.type === 'new') {
+          setLogs(prev => {
+            const updated = [...prev, data.log];
+            if (updated.length > 500) updated.shift();
+            return updated;
+          });
+        }
+        const d = new Date();
+        setLastLogUpdate(`Updated ${d.toLocaleTimeString('en-US', { hour12: false })}`);
+      } catch (e) {
+        console.error('Error parsing SSE data', e);
+      }
+    };
 
     // Polling intervals
     const balanceInterval = setInterval(() => fetchBalance(false), 10000);
-    const logsInterval = setInterval(fetchLogs, 1000);
 
     return () => {
       clearInterval(balanceInterval);
-      clearInterval(logsInterval);
+      eventSource.close();
     };
   }, []);
 

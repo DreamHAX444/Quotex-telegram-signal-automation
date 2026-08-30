@@ -1,7 +1,7 @@
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import type { TradeSignal, ExecutionResult, AccountBalance, ActionType } from './types.js';
 import { isUpAction, isDownAction } from './types.js';
 import { config } from './config.js';
@@ -406,12 +406,12 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
             // Forcefully terminate zombie Chrome processes for this profile
             if (process.platform === 'win32') {
               try {
-                execSync(`wmic process where "name='chrome.exe' and commandline like '%${config.chromeProfileName}%'" call terminate`, { stdio: 'ignore' });
+                execFileSync('wmic', ['process', 'where', `name='chrome.exe' and commandline like '%${config.chromeProfileName}%'`, 'call', 'terminate'], { stdio: 'ignore' });
               } catch {
-                execSync('taskkill /IM chrome.exe /F', { stdio: 'ignore' });
+                execFileSync('taskkill', ['/IM', 'chrome.exe', '/F'], { stdio: 'ignore' });
               }
             } else {
-              execSync(`pkill -f "chrome.*${config.chromeProfileName}"`, { stdio: 'ignore' });
+              execFileSync('pkill', ['-f', `chrome.*${config.chromeProfileName}`], { stdio: 'ignore' });
             }
             logger.browser('✅ Zombie Chrome processes terminated.');
             
@@ -724,8 +724,9 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
           const textCanon = canon(text);
           if (textCanon === targetCanon || textCanon.includes(targetCanon) || targetCanon.includes(textCanon)) {
             const targetToClick = (el.querySelector('span.Z2fyK, .teoXG, .e4qZ6') || el) as HTMLElement;
-            const rect = targetToClick.getBoundingClientRect();
-            return { x: rect.x + (rect.width / 2), y: rect.y + (rect.height / 2) };
+            targetToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
+            targetToClick.click();
+            return true;
           }
         }
 
@@ -768,18 +769,18 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
         }
 
         if (bestEl && bestScore > 0) {
-          const rect = bestEl.getBoundingClientRect();
-          return { x: rect.x + (rect.width / 2), y: rect.y + (rect.height / 2) };
+          bestEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+          bestEl.click();
+          return true;
         }
 
-        return null;
+        return false;
       },
       { targetCanon }
     );
 
-    if (clicked && clicked.x && clicked.y) {
-      await page.mouse.click(clicked.x, clicked.y);
-      logger.browser(`✅ Clicked search result for "${searchQuery}" at ${Math.round(clicked.x)}, ${Math.round(clicked.y)}`);
+    if (clicked) {
+      logger.browser(`✅ Clicked search result for "${searchQuery}" directly via DOM`);
       return true;
     }
 

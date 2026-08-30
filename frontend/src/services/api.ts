@@ -8,7 +8,7 @@ export interface BalanceResponse {
     numericValue: number;
     timestamp: string;
   } | null;
-  history?: any[];
+  history?: unknown[];
   error?: string;
 }
 
@@ -22,7 +22,7 @@ export interface LogEntry {
   timestamp: string;
   level: string;
   message: string;
-  meta?: any;
+  meta?: unknown;
 }
 
 // In development, Vite will proxy /api to the backend. In production, it's served from the same host.

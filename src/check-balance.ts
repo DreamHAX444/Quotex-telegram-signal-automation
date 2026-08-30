@@ -62,8 +62,8 @@ async function main(): Promise<void> {
       console.log('2. The page URL might be stuck on a CAPTCHA or loading screen.');
       console.log(`3. Target URL is: ${config.targetUrl}\n`);
     }
-  } catch (error: any) {
-    console.error('\n❌ Balance check failed with error:', error?.message || error);
+  } catch (error: unknown) {
+    console.error('\n❌ Balance check failed with error:', error instanceof Error ? error.message : String(error));
   } finally {
     await closeWarmBrowser();
     console.log('\nBrowser session closed cleanly.');

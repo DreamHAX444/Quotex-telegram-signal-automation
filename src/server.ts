@@ -9,7 +9,7 @@ import { config, updateVipChannelId } from './config.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
-async function parseJsonBody(req: http.IncomingMessage): Promise<any> {
+async function parseJsonBody(req: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => { 
@@ -96,7 +96,7 @@ export function startDashboardServer(port = PORT) {
           history: balanceManager.getBalanceHistory(),
         });
       } else if (pathname === '/api/switch-account' && req.method === 'POST') {
-        const data = await parseJsonBody(req);
+        const data = (await parseJsonBody(req)) as Record<string, any>;
         const type = data.activeType;
         if (type !== 'Live' && type !== 'Demo') {
           return jsonResponse(400, { success: false, error: 'Invalid account type' });
@@ -110,17 +110,17 @@ export function startDashboardServer(port = PORT) {
         });
         jsonResponse(200, { success: result.success });
       } else if (pathname === '/api/settings/default-account' && req.method === 'POST') {
-        const data = await parseJsonBody(req);
+        const data = (await parseJsonBody(req)) as Record<string, any>;
         const type = data.defaultType;
         if (type === 'Live' || type === 'Demo') {
           const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
-          fs.writeFileSync(settingsPath, JSON.stringify({ defaultAccount: type }) + '\n');
+          await fs.promises.writeFile(settingsPath, JSON.stringify({ defaultAccount: type }) + '\n');
         }
         jsonResponse(200, { success: true });
       } else if (pathname === '/api/channel' && req.method === 'GET') {
         jsonResponse(200, { currentChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/channel/switch' && req.method === 'POST') {
-        const data = await parseJsonBody(req);
+        const data = (await parseJsonBody(req)) as Record<string, any>;
         if (!data.channel) {
           return jsonResponse(400, { success: false, error: 'Missing channel ID' });
         }
@@ -141,12 +141,12 @@ export function startDashboardServer(port = PORT) {
       } else {
         serveStatic(req, res);
       }
-    } catch (err: any) {
-      jsonResponse(500, { success: false, error: err?.message || String(err) });
+    } catch (err: unknown) {
+      jsonResponse(500, { success: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  server.on('error', (e: any) => {
+  server.on('error', (e: NodeJS.ErrnoException) => {
     if (e.code === 'EADDRINUSE') {
       if (port > 3020) return logger.error('Too many ports in use');
       logger.warn(`Port ${port} is in use, trying port ${port + 1}...`);

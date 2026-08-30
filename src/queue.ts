@@ -7,7 +7,7 @@ import { logger } from './logger.js';
  * deterministic, serialized execution of trading/automation tasks.
  */
 class AutomationQueue {
-  private tail: Promise<any> = Promise.resolve();
+  private tail: Promise<unknown> = Promise.resolve();
   private pendingCount: number = 0;
   private isPausedState: boolean = false;
   private clearEpoch: number = 0;

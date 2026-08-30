@@ -27,7 +27,7 @@ function log(level: LogLevel, message: string, meta?: unknown): void {
   const timestamp = formatTimestamp();
   const prefix = `[${timestamp}] [${level.padEnd(8)}]`;
   
-  let formattedMeta: any = meta;
+  let formattedMeta: unknown = meta;
   if (meta !== undefined) {
     if (meta instanceof Error) {
       console.log(`${prefix} ${message} - ${meta.stack || meta.message}`);

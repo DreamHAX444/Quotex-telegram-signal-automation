@@ -39,7 +39,7 @@ async function listChannels(): Promise<void> {
 
     for (const d of dialogs) {
       if (d.isChannel || d.isGroup) {
-        const entity = d.entity as any;
+        const entity = d.entity as Record<string, any>;
         let rawId = '';
         let botApiId = '';
 
@@ -72,7 +72,7 @@ async function listChannels(): Promise<void> {
 
     await client.disconnect();
     console.log('\nDone.');
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('Failed to list channels:', err);
     process.exit(1);
   }

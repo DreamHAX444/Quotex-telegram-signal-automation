@@ -43,8 +43,9 @@ const client = new TelegramClient(session, config.apiId, config.apiHash, {
 /**
  * Extracts the numerical peer channel/chat ID as a BigInt from GramJS peer or message.
  */
-function extractPeerChannelId(target: any): bigint | null {
-  if (!target) return null;
+function extractPeerChannelId(target: unknown): bigint | null {
+  if (!target || typeof target !== 'object') return null;
+  const t = target as Record<string, any>;
 
   if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
     return BigInt(target.channelId.toString());
@@ -55,16 +56,16 @@ function extractPeerChannelId(target: any): bigint | null {
     return BigInt(cleaned);
   }
 
-  if (target.channelId !== undefined) {
-    return BigInt(target.channelId.toString());
+  if (t.channelId !== undefined) {
+    return BigInt(t.channelId.toString());
   }
 
-  if (target.peerId) {
-    return extractPeerChannelId(target.peerId);
+  if (t.peerId) {
+    return extractPeerChannelId(t.peerId);
   }
 
-  if (target.chatId !== undefined) {
-    const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
+  if (t.chatId !== undefined) {
+    const cleaned = t.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
     try {
       return BigInt(cleaned);
     } catch {}
@@ -392,9 +393,10 @@ function startActivePolling(): void {
           }
         }
       }
-    } catch (err: any) {
-      if (err?.errorMessage === 'FLOOD_WAIT' || err?.message?.includes('FLOOD')) {
-        const waitTime = err.seconds || 5;
+    } catch (err: unknown) {
+      const e = err as Record<string, any>;
+      if (e?.errorMessage === 'FLOOD_WAIT' || e?.message?.includes('FLOOD')) {
+        const waitTime = e.seconds || 5;
         logger.warn(`⚠️ Telegram rate limit (FloodWait) hit during polling. Backing off for ${waitTime} seconds...`);
         nextDelay = waitTime * 1000;
       }
@@ -447,6 +449,7 @@ process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception thrown', err);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {

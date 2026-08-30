@@ -1,6 +1,6 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
-import { NewMessage } from 'telegram/events/index.js';
+import { NewMessage, NewMessageEvent } from 'telegram/events/index.js';
 import { Api } from 'telegram/tl/index.js';
 import dotenv from 'dotenv';
 import { config } from './src/config.js';
@@ -8,8 +8,10 @@ import fs from 'fs';
 
 dotenv.config();
 
-function extractPeerChannelId(target: any): bigint | null {
-  if (!target) return null;
+function extractPeerChannelId(target: unknown): bigint | null {
+  if (!target || typeof target !== 'object') return null;
+  const t = target as Record<string, any>;
+
   if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
     return BigInt(target.channelId.toString());
   }
@@ -17,14 +19,14 @@ function extractPeerChannelId(target: any): bigint | null {
     const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
     return BigInt(cleaned);
   }
-  if (target.channelId !== undefined) {
-    return BigInt(target.channelId.toString());
+  if (t.channelId !== undefined) {
+    return BigInt(t.channelId.toString());
   }
-  if (target.peerId) {
-    return extractPeerChannelId(target.peerId);
+  if (t.peerId) {
+    return extractPeerChannelId(t.peerId);
   }
-  if (target.chatId !== undefined) {
-    const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
+  if (t.chatId !== undefined) {
+    const cleaned = t.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
     try {
       return BigInt(cleaned);
     } catch {}
@@ -41,14 +43,14 @@ async function start() {
   await client.connect();
   console.log('Connected! Listening to ALL messages for 30 seconds...');
 
-  client.addEventHandler((event: any) => {
+  client.addEventHandler((event: NewMessageEvent) => {
     const message = event.message;
     if (!message) return;
     const peerIdObj = message.peerId || message;
     const extracted = extractPeerChannelId(peerIdObj);
     const logStr = `\n--- NEW MESSAGE ---\nExtracted ID: ${extracted}\nTarget VIP ID: ${config.vipChannelIdBigInt}\nPeerId Object: ${JSON.stringify(peerIdObj, (k,v) => typeof v === 'bigint' ? v.toString() : v)}\nMessage text: ${message.message}\n`;
     console.log(logStr);
-    fs.appendFileSync('test_log.txt', logStr);
+    fs.promises.appendFile('test_log.txt', logStr).catch(console.error);
   }, new NewMessage({}));
 
   setTimeout(() => {

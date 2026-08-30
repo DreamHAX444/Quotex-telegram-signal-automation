@@ -105,7 +105,7 @@ export function parseCurrencyAndNumber(raw: string): {
 export async function extractBalanceFromPage(page: Page): Promise<AccountBalance | null> {
   try {
     // Wait briefly for UI elements to render if page just loaded
-    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.waitForLoadState('domcontentloaded').catch(e => logger.warn('waitForLoadState error', e));
     await page.waitForTimeout(600);
 
     const rawData = await page.evaluate(() => {

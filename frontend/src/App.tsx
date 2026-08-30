@@ -29,10 +29,12 @@ function App() {
       if (channel) {
         setActiveChannel(channel);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error('Failed to fetch settings/channel', e);
+    }
   };
 
-  const updateBalanceState = (balanceData: any) => {
+  const updateBalanceState = (balanceData: { formattedBalance?: string; accountType?: string; timestamp: string | number | Date }) => {
     if (balanceData && balanceData.formattedBalance) {
       setBalance(balanceData.formattedBalance);
       setAccountType(balanceData.accountType || 'Unknown');
@@ -102,7 +104,7 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col antialiased font-sans overflow-hidden selection:bg-accent/20 selection:text-accent bg-background text-foreground">
-      <Header systemMode={accountType as any} />
+      <Header systemMode={accountType as 'Live' | 'Demo' | 'Unknown'} />
       
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 grid-rows-[auto_1fr] lg:grid-rows-1 min-h-0 overflow-hidden">
         <Sidebar 

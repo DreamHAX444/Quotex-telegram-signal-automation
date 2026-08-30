@@ -7,8 +7,10 @@ import { parseSignal } from './src/parser.js';
 
 dotenv.config();
 
-function extractPeerChannelId(target: any): bigint | null {
-  if (!target) return null;
+function extractPeerChannelId(target: unknown): bigint | null {
+  if (!target || typeof target !== 'object') return null;
+  const t = target as Record<string, any>;
+
   if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
     return BigInt(target.channelId.toString());
   }
@@ -16,14 +18,14 @@ function extractPeerChannelId(target: any): bigint | null {
     const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
     return BigInt(cleaned);
   }
-  if (target.channelId !== undefined) {
-    return BigInt(target.channelId.toString());
+  if (t.channelId !== undefined) {
+    return BigInt(t.channelId.toString());
   }
-  if (target.peerId) {
-    return extractPeerChannelId(target.peerId);
+  if (t.peerId) {
+    return extractPeerChannelId(t.peerId);
   }
-  if (target.chatId !== undefined) {
-    const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
+  if (t.chatId !== undefined) {
+    const cleaned = t.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
     try {
       return BigInt(cleaned);
     } catch {}
@@ -58,7 +60,7 @@ async function start() {
          console.log('Raw peerId object:', JSON.stringify(msg.peerId, (k,v) => typeof v === 'bigint' ? v.toString() : v));
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('Failed to fetch messages:', err);
   }
 

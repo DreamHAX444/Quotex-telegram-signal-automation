@@ -397,8 +397,8 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
         }
 
         break; // Success, exit retry loop
-      } catch (err: any) {
-        const errorMessage = err?.message || String(err);
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('locked')) {
           retryCount++;
           logger.error(`🚨 BROWSER PROFILE LOCKED. Attempting auto-cleanup (Attempt ${retryCount}/2)...`);
@@ -1043,7 +1043,7 @@ export async function clickTradeButton(
 
   // If JS click somehow didn't find anything, try Playwright locator as last resort
   logger.browser(`⚠️ JS click missed, trying Playwright locator...`);
-  const debug = (result as any).debug || '';
+  const debug = (result as { debug?: string }).debug || '';
   logger.debug(`DOM state: ${debug}`);
 
   try {

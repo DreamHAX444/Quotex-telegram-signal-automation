@@ -38,7 +38,7 @@ function getAvailableChromeProfiles(userDataDir: string): ChromeProfileInfo[] {
     const profiles: ChromeProfileInfo[] = [];
 
     for (const [folderName, info] of Object.entries(infoCache)) {
-      const data = info as any;
+      const data = info as { name?: string; user_name?: string; hosted_domain?: string };
       const displayName = data.name || folderName;
       const email = data.user_name || data.hosted_domain || '(No Email Linked)';
       profiles.push({

@@ -416,13 +416,13 @@ async function runTestSuite(): Promise<void> {
 
   const upClickResult = await clickTradeButton(page, 'UP');
   assert.strictEqual(upClickResult.success, true, 'clickTradeButton for UP must succeed');
-  const clickedUp = await page.evaluate(() => (window as any).lastClicked);
+  const clickedUp = await page.evaluate(() => (window as unknown as { lastClicked: string }).lastClicked);
   assert.strictEqual(clickedUp, 'UP', 'UP button event listener must be triggered');
   console.log(`  ✔ Verified UP click: Selector used "${upClickResult.selectorUsed}"`);
 
   const downClickResult = await clickTradeButton(page, 'DOWN');
   assert.strictEqual(downClickResult.success, true, 'clickTradeButton for DOWN must succeed');
-  const clickedDown = await page.evaluate(() => (window as any).lastClicked);
+  const clickedDown = await page.evaluate(() => (window as unknown as { lastClicked: string }).lastClicked);
   assert.strictEqual(clickedDown, 'DOWN', 'DOWN button event listener must be triggered');
   console.log(`  ✔ Verified DOWN click: Selector used "${downClickResult.selectorUsed}"`);
 
@@ -563,7 +563,7 @@ async function runTestSuite(): Promise<void> {
   });
 
   assert.strictEqual(clickedResult, true, 'Opener must find and click the right + button');
-  const clickedBtn = await page2.evaluate(() => (window as any).clickedButton);
+  const clickedBtn = await page2.evaluate(() => (window as unknown as { clickedButton: string }).clickedButton);
   assert.strictEqual(clickedBtn, 'ADD_ASSET_PLUS', 'Clicked button MUST be ADD_ASSET_PLUS and NEVER DEPOSIT_BUTTON');
   console.log(`  ✔ Verified: Right '+' button (${clickedBtn}) was clicked, Deposit button was strictly skipped.`);
 
@@ -676,7 +676,7 @@ async function runTestSuite(): Promise<void> {
   }, targetCanon);
 
   assert.strictEqual(matchedAndClicked, true, 'Exact Quotex search table row must match and click');
-  const clickedAsset = await page3.evaluate(() => (window as any).clickedAsset);
+  const clickedAsset = await page3.evaluate(() => (window as unknown as { clickedAsset: string }).clickedAsset);
   assert.ok(clickedAsset && clickedAsset.includes('USD/MXN'), 'Clicked asset must be USD/MXN');
   console.log(`  ✔ Verified: Exact Quotex asset row matched and clicked "${clickedAsset}".`);
 

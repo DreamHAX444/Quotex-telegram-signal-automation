@@ -21,7 +21,11 @@ function getAvailableChromeProfiles(userDataDir: string): ChromeProfileInfo[] {
     // If Local State is not found, fallback to scanning directory folders
     const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
     return entries
-      .filter((e) => e.isDirectory() && (e.name === 'Default' || e.name.startsWith('Profile ')))
+      .filter((e) => {
+        if (!e.isDirectory()) return false;
+        const profilePath = path.join(userDataDir, e.name);
+        return fs.existsSync(path.join(profilePath, 'Preferences')) || fs.existsSync(path.join(profilePath, 'Secure Preferences'));
+      })
       .map((e) => ({
         folderName: e.name,
         displayName: e.name,

@@ -5,12 +5,13 @@ interface AccountControlsProps {
   activeAccount: string;
   defaultAccount: string;
   activeChannel: string | null;
+  availableChannels: { id: string; name: string }[];
   onActiveChange: (type: string) => void;
   onDefaultChange: (type: string) => void;
   onChannelChange: (channelId: string) => void;
 }
 
-export function AccountControls({ activeAccount, defaultAccount, activeChannel, onActiveChange, onDefaultChange, onChannelChange }: AccountControlsProps) {
+export function AccountControls({ activeAccount, defaultAccount, activeChannel, availableChannels, onActiveChange, onDefaultChange, onChannelChange }: AccountControlsProps) {
   const [switching, setSwitching] = useState(false);
   const [defaultSwitching, setDefaultSwitching] = useState(false);
   const [channelSwitching, setChannelSwitching] = useState(false);
@@ -126,24 +127,22 @@ export function AccountControls({ activeAccount, defaultAccount, activeChannel, 
             {channelSwitching && <span className="text-[9px] text-accent animate-pulse">Switching...</span>}
           </div>
           <div className="flex items-center p-1 bg-muted/50 rounded-lg border border-border">
-            <button 
-              onClick={() => handleChannelSwitch('-1003922846451')}
-              disabled={channelSwitching}
-              className={`flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all border ${
-                activeChannel === '-1003922846451' ? 'bg-background text-foreground shadow-sm border-border' : 'text-muted-foreground border-transparent hover:text-foreground'
-              }`}
-            >
-              Test Channel
-            </button>
-            <button 
-              onClick={() => handleChannelSwitch('-1001771915378')}
-              disabled={channelSwitching}
-              className={`flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all border ${
-                activeChannel === '-1001771915378' ? 'bg-background text-foreground shadow-sm border-border' : 'text-muted-foreground border-transparent hover:text-foreground'
-              }`}
-            >
-              Main Channel
-            </button>
+            {availableChannels && availableChannels.length > 0 ? (
+              availableChannels.map((channel) => (
+                <button 
+                  key={channel.id}
+                  onClick={() => handleChannelSwitch(channel.id)}
+                  disabled={channelSwitching}
+                  className={`flex-1 text-[11px] font-medium py-1.5 px-2 rounded-md transition-all border ${
+                    activeChannel === channel.id ? 'bg-background text-foreground shadow-sm border-border' : 'text-muted-foreground border-transparent hover:text-foreground'
+                  }`}
+                >
+                  {channel.name}
+                </button>
+              ))
+            ) : (
+              <span className="text-[11px] text-muted-foreground py-1.5 px-2">No channels configured</span>
+            )}
           </div>
         </div>
       </div>

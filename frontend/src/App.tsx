@@ -14,6 +14,7 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lastLogUpdate, setLastLogUpdate] = useState('Syncing...');
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
+  const [availableChannels, setAvailableChannels] = useState<{id: string, name: string}[]>([]);
   
   // Strategy is hardcoded in the original UI for now
   const strategy = 'Smart Sequential v2'; 
@@ -23,6 +24,9 @@ function App() {
       const data = await api.fetchSettings();
       if (data && data.defaultAccount) {
         setDefaultAccount(data.defaultAccount);
+      }
+      if (data && data.availableChannels) {
+        setAvailableChannels(data.availableChannels);
       }
       
       const channel = await api.fetchActiveChannel();
@@ -119,6 +123,7 @@ function App() {
           accountType={accountType}
           defaultAccount={defaultAccount}
           activeChannel={activeChannel}
+          availableChannels={availableChannels}
           lastSync={lastSync}
           strategy={strategy}
           isSyncing={isSyncing}

@@ -113,8 +113,12 @@ export async function updateVipChannelId(newChannelId: string) {
   const envPath = path.resolve(process.cwd(), '.env');
   if (fs.existsSync(envPath)) {
     let envContent = await fs.promises.readFile(envPath, 'utf8');
-    // Replace VIP_CHANNEL_ID=... with the new value
-    envContent = envContent.replace(/^VIP_CHANNEL_ID=.*$/m, `VIP_CHANNEL_ID=${raw}`);
+    // Replace VIP_CHANNEL_ID=... with the new value, or append if missing
+    if (envContent.match(/^VIP_CHANNEL_ID=.*$/m)) {
+      envContent = envContent.replace(/^VIP_CHANNEL_ID=.*$/m, `VIP_CHANNEL_ID=${raw}`);
+    } else {
+      envContent += `\nVIP_CHANNEL_ID=${raw}\n`;
+    }
     await fs.promises.writeFile(envPath, envContent, 'utf8');
     logger.info(`Updated VIP_CHANNEL_ID to ${raw} in .env file and memory.`);
   } else {

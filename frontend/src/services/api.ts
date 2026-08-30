@@ -14,6 +14,7 @@ export interface BalanceResponse {
 
 export interface SettingsResponse {
   defaultAccount: string;
+  availableChannels?: { id: string; name: string; }[];
   success?: boolean;
   error?: string;
 }
@@ -28,60 +29,60 @@ export interface LogEntry {
 // In development, Vite will proxy /api to the backend. In production, it's served from the same host.
 const API_BASE = ''; 
 
+async function fetchApi(url: string, options?: RequestInit) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    throw new Error(`HTTP error! status: ${res.status}`);
+  }
+  return res.json();
+}
+
 export const api = {
   async fetchBalance(): Promise<BalanceResponse> {
-    const res = await fetch(`${API_BASE}/api/balance`);
-    return res.json();
+    return fetchApi(`${API_BASE}/api/balance`);
   },
 
   async refreshBalance(): Promise<BalanceResponse> {
-    const res = await fetch(`${API_BASE}/api/balance/refresh`);
-    return res.json();
+    return fetchApi(`${API_BASE}/api/balance/refresh`);
   },
 
   async fetchLogs(): Promise<LogEntry[]> {
-    const res = await fetch(`${API_BASE}/logs`);
-    return res.json();
+    return fetchApi(`${API_BASE}/logs`);
   },
 
   async fetchSettings(): Promise<SettingsResponse> {
-    const res = await fetch(`${API_BASE}/api/settings`);
-    return res.json();
+    return fetchApi(`${API_BASE}/api/settings`);
   },
 
   async setStartupDefault(type: 'Live' | 'Demo'): Promise<boolean> {
-    const res = await fetch(`${API_BASE}/api/settings/default-account`, {
+    const data = await fetchApi(`${API_BASE}/api/settings/default-account`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ defaultType: type })
     });
-    const data = await res.json();
     return !!data.success;
   },
 
   async setActiveAccount(type: 'Live' | 'Demo'): Promise<boolean> {
-    const res = await fetch(`${API_BASE}/api/switch-account`, {
+    const data = await fetchApi(`${API_BASE}/api/switch-account`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeType: type })
     });
-    const data = await res.json();
     return !!data.success;
   },
 
   async fetchActiveChannel(): Promise<string | null> {
-    const res = await fetch(`${API_BASE}/api/channel`);
-    const data = await res.json();
+    const data = await fetchApi(`${API_BASE}/api/channel`);
     return data.currentChannel || null;
   },
 
   async setActiveChannel(channelId: string): Promise<boolean> {
-    const res = await fetch(`${API_BASE}/api/channel/switch`, {
+    const data = await fetchApi(`${API_BASE}/api/channel/switch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: channelId })
     });
-    const data = await res.json();
     return !!data.success;
   }
 };

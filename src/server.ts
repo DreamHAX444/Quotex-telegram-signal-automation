@@ -161,7 +161,13 @@ export function startDashboardServer(port = PORT) {
         jsonResponse(200, { success: true, newChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/settings' && req.method === 'GET') {
         const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
-        let settings = { defaultAccount: 'Demo' };
+        let settings = { 
+          defaultAccount: 'Demo',
+          availableChannels: [
+            { id: '-1003922846451', name: 'Test Channel' },
+            { id: '-1001771915378', name: 'Main Channel' }
+          ]
+        };
         try {
           await fs.promises.access(settingsPath);
           const parsed = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));

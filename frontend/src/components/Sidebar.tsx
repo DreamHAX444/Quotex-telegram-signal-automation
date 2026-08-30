@@ -6,6 +6,7 @@ interface SidebarProps {
   accountType: string;
   defaultAccount: string;
   activeChannel: string | null;
+  availableChannels: { id: string; name: string }[];
   lastSync: string;
   strategy: string;
   isSyncing: boolean;
@@ -20,6 +21,7 @@ export function Sidebar({
   accountType, 
   defaultAccount, 
   activeChannel,
+  availableChannels,
   lastSync, 
   strategy, 
   isSyncing, 
@@ -78,6 +80,7 @@ export function Sidebar({
         activeAccount={accountType} 
         defaultAccount={defaultAccount}
         activeChannel={activeChannel}
+        availableChannels={availableChannels}
         onActiveChange={onActiveChange}
         onDefaultChange={onDefaultChange}
         onChannelChange={onChannelChange}

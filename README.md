@@ -1,6 +1,6 @@
 # Cortex Automation - Telegram UserBot & Playwright Engine
 
-A deterministic, high-reliability Telegram UserBot built with TypeScript, GramJS, Playwright, and `p-queue`. It monitors a specific private VIP Telegram channel, extracts strictly formatted commands/signals, and triggers sequential browser automation tasks.
+A deterministic, high-reliability Telegram UserBot built with TypeScript, GramJS, Playwright, and a custom `AutomationQueue`. It monitors a specific private VIP Telegram channel, extracts strictly formatted commands/signals, and triggers sequential browser automation tasks.
 
 ---
 
@@ -10,7 +10,7 @@ A deterministic, high-reliability Telegram UserBot built with TypeScript, GramJS
 2. **"Get ready" Browser Pre-warming (Zero Cold-Start Latency):** When the channel broadcasts `"Get ready"` or `"PREPARE: [TICKER]"`, the bot pre-opens the browser with previous session cookies/storage (or your personal Chrome profile), pre-loads the trading interface, and stands by. When the subsequent `BUY`/`SELL` order arrives, execution happens instantly (~15ms) on the active page!
 3. **Browser Context & User Profile Persistence:** Playwright automatically stores and loads `storageState` in `./.auth/storageState.json` (or can launch your personal Chrome profile via `CHROME_USER_DATA_DIR`). This eliminates repetitive login screens, 2FA prompts, and anti-bot CAPTCHAs.
 4. **Automated Telegram Debug Alerts:** If a browser automation step crashes or times out, Playwright takes a full-page failure screenshot and the bot automatically forwards it to your Telegram **"Saved Messages" (`me`)** along with the error stack and timestamp.
-5. **Strict Concurrency Control (`concurrency: 1`):** Uses `p-queue` to lock execution to exactly one browser instance at a time. Rapid-fire signals from the VIP channel are queued FIFO, preventing server CPU/RAM exhaustion and zombie browser processes.
+5. **Strict Concurrency Control (`concurrency: 1`):** Uses a custom `AutomationQueue` to lock execution to exactly one browser instance at a time. Rapid-fire signals from the VIP channel are queued FIFO, preventing server CPU/RAM exhaustion and zombie browser processes.
 6. **Graceful Teardown Lifecycle:** Handlers for `SIGINT` and `SIGTERM` ensure that when stopping or restarting the bot, any warm browser session is closed, the queue is drained/paused, the GramJS MTProto client disconnects cleanly, and all Playwright instances are closed.
 7. **Structured Timestamped Logging:** Standardized log outputs (`[YYYY-MM-DD HH:mm:ss.SSS] [LEVEL]`) covering Telegram events, queue status, and browser steps.
 

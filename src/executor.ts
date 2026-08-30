@@ -12,12 +12,9 @@ let globalContext: BrowserContext | null = null;
 
 /**
  * ═══════════════════════════════════════════════════════════════════
- * MARKET STATE MANAGEMENT (Rebuilt from scratch)
+ * MARKET STATE MANAGEMENT
  * ═══════════════════════════════════════════════════════════════════
- * The cache is ONLY updated after a verified DOM read confirms the
- * market actually changed. It auto-expires after 60 seconds so we
- * never trust a stale value when the user might have switched
- * manually inside Chrome.
+ * Verified cache auto-expires after 60 seconds to guarantee DOM truth.
  */
 let currentActiveMarket: string | null = null;
 let lastVerifiedAt: number = 0;
@@ -25,7 +22,6 @@ const CACHE_TTL_MS = 60_000; // 60 seconds
 
 export function getActiveMarket(): string | null {
   if (currentActiveMarket && (Date.now() - lastVerifiedAt) > CACHE_TTL_MS) {
-    // Cache expired — force re-check from DOM on next selectMarket call
     return null;
   }
   return currentActiveMarket;
@@ -38,105 +34,239 @@ export function setActiveMarket(market: string | null): void {
 
 /**
  * ═══════════════════════════════════════════════════════════════════
- * TICKER UTILITIES (Rebuilt from scratch)
+ * SECTOR-AWARE TICKER & ALIAS ENGINE
  * ═══════════════════════════════════════════════════════════════════
+ * Covers all asset classes: Forex, Crypto, Commodities, Stocks, Indices.
  */
+export const TICKER_ALIASES: Record<string, string[]> = {
+  // Commodities
+  GOLD: ['XAU', 'XAUUSD', 'GOLD'],
+  SILVER: ['XAG', 'XAGUSD', 'SILVER'],
+  UKBRENT: ['BRENT', 'BRENTCRUDE', 'UKBRENT'],
+  USCRUDE: ['WTI', 'CRUDE', 'CRUDEOIL', 'USCRUDE', 'WTICRUDE'],
+  NATURALGAS: ['NGAS', 'NATGAS', 'NATURALGAS'],
+  // Crypto
+  BTCUSD: ['BTC', 'BITCOIN', 'BTCUSD'],
+  ETHUSD: ['ETH', 'ETHEREUM', 'ETHUSD'],
+  SOLUSD: ['SOL', 'SOLANA', 'SOLUSD'],
+  XRPUSD: ['XRP', 'RIPPLE', 'XRPUSD'],
+  DOGEUSD: ['DOGE', 'DOGECOIN', 'DOGEUSD'],
+  LTCUSD: ['LTC', 'LITECOIN', 'LTCUSD'],
+  BNBUSD: ['BNB', 'BINANCECOIN', 'BNBUSD'],
+  ADAUSD: ['ADA', 'CARDANO', 'ADAUSD'],
+  DOTUSD: ['DOT', 'POLKADOT', 'DOTUSD'],
+  TRXUSD: ['TRX', 'TRON', 'TRXUSD'],
+  // Stocks / Equities
+  APPLE: ['AAPL', 'APPLE'],
+  MICROSOFT: ['MSFT', 'MICROSOFT'],
+  GOOGLE: ['GOOGL', 'GOOG', 'ALPHABET', 'GOOGLE'],
+  AMAZON: ['AMZN', 'AMAZON'],
+  META: ['META', 'FB', 'FACEBOOK'],
+  TESLA: ['TSLA', 'TESLA'],
+  NVIDIA: ['NVDA', 'NVIDIA'],
+  BOEING: ['BA', 'BOEING', 'BOEINGCOMPANY'],
+  INTEL: ['INTC', 'INTEL'],
+  PFIZER: ['PFE', 'PFIZER'],
+  JOHNSONJOHNSON: ['JNJ', 'JOHNSON', 'JOHNSONJOHNSON'],
+  MCDONALDS: ['MCD', 'MCDONALDS', 'MCDONALD'],
+  COCACOLA: ['KO', 'COCACOLA', 'COKE'],
+  VISA: ['V', 'VISA'],
+  MASTERCARD: ['MA', 'MASTERCARD'],
+  DISNEY: ['DIS', 'DISNEY', 'WALTDISNEY'],
+  NETFLIX: ['NFLX', 'NETFLIX'],
+  NIKE: ['NKE', 'NIKE'],
+  WALMART: ['WMT', 'WALMART'],
+  ALIBABA: ['BABA', 'ALIBABA'],
+  // Indices
+  SP500: ['US500', 'SPX', 'SP500', 'STANDARDPOORS'],
+  NASDAQ: ['US100', 'NAS100', 'NDX', 'NASDAQ', 'NASDAQ100'],
+  DOWJONES: ['US30', 'DJI', 'DOW', 'DOWJONES'],
+  DAX: ['GER40', 'DAX40', 'DAX', 'GERMANY40'],
+  FTSE: ['UK100', 'FTSE', 'FTSE100'],
+  ASIANCOMPOSITE: ['ASIANCOMPOSITE', 'ASIANCOMPOSITEINDEX'],
+  COMMODITYCOMPOSITE: ['COMMODITYCOMPOSITE', 'COMMODITYCOMPOSITEINDEX'],
+  CRYPTOCOMPOSITE: ['CRYPTOCOMPOSITE', 'CRYPTOCOMPOSITEINDEX'],
+  EUROPECOMPOSITE: ['EUROPECOMPOSITE', 'EUROPECOMPOSITEINDEX'],
+  USDINDEX: ['USDINDEX', 'DXY'],
+};
 
 /**
- * Strips ALL non-alphanumeric characters and uppercases for comparison.
- * "EUR/USD (OTC)" → "EURUSDOTC"
- * "USD CHF OTC"   → "USDCHFOTC"
- * "EURUSD"        → "EURUSD"
+ * Strips payout percentages (+87%, 82%, etc.), badges, and linebreaks from DOM text.
  */
-function canonicalize(ticker: string): string {
-  return ticker.toUpperCase().replace(/[^A-Z0-9]/g, '');
+export function stripPayoutAndNoise(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\+?\d{1,3}\s*%/g, '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
- * Fuzzy-matches two ticker representations.
- * Handles all the ways Quotex might display a market vs how the signal
- * sender types it:
- *   "EUR/USD OTC"     ↔ "EUR/USD (OTC)"   ✅
- *   "USD CHF OTC"     ↔ "USD/CHF (OTC)"   ✅
- *   "EURUSD"          ↔ "EUR/USD"          ✅
- *   "GOLD"            ↔ "Gold"             ✅
- *   "EUR/USD"         ↔ "EUR/USD (OTC)"    ❌ (different market!)
+ * Strips non-alphanumerics and maps aliases to canonical base representations.
  */
-function tickersMatch(signalTicker: string, domTicker: string): boolean {
+export function canonicalize(ticker: string): string {
+  if (!ticker || typeof ticker !== 'string') return '';
+  const cleaned = stripPayoutAndNoise(ticker)
+    .toUpperCase()
+    .replace(/\bOTC\b/g, '')
+    .replace(/[^A-Z0-9]/g, '');
+
+  if (!cleaned) return '';
+
+  for (const [canonical, aliases] of Object.entries(TICKER_ALIASES)) {
+    if (canonical === cleaned || aliases.includes(cleaned)) {
+      return canonical;
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Checks whether two ticker representations refer to the same asset.
+ * Relaxed OTC checking ensures trades are never blocked by broker display variances.
+ */
+export function tickersMatch(signalTicker: string, domTicker: string): boolean {
   const a = canonicalize(signalTicker);
   const b = canonicalize(domTicker);
   if (!a || !b) return false;
 
-  // Exact canonical match
+  // Exact canonical match (with alias normalization)
   if (a === b) return true;
 
-  // Check OTC mismatch: if one has OTC and the other doesn't, they're different markets
-  const aHasOtc = a.includes('OTC');
-  const bHasOtc = b.includes('OTC');
-  if (aHasOtc !== bHasOtc) return false;
+  // Substring matching for multi-word asset names (e.g. "BOEINGCOMPANY" vs "BOEING")
+  if (a.length >= 4 && b.length >= 4) {
+    if (a.includes(b) || b.includes(a)) return true;
+  }
 
-  // Strip OTC from both and compare the base pair
-  const aBase = a.replace('OTC', '');
-  const bBase = b.replace('OTC', '');
-  return aBase === bBase;
+  return false;
 }
 
 /**
- * Converts a raw ticker from the signal parser into:
- *   - query:    The text to type into Quotex's search box (NEVER includes "OTC"
- *               because Quotex search doesn't support it — it just hides all results)
- *   - wantsOtc: Whether the original signal asked for the OTC variant
- *   - fullName: The complete ticker with OTC for logging / matching
- *
- * Examples:
- *   "USD CHF OTC" → { query: "USD/CHF", wantsOtc: true,  fullName: "USD/CHF OTC" }
- *   "EUR USD"     → { query: "EUR/USD", wantsOtc: false, fullName: "EUR/USD" }
- *   "EURUSD"      → { query: "EUR/USD", wantsOtc: false, fullName: "EUR/USD" }
- *   "GOLD"        → { query: "GOLD",    wantsOtc: false, fullName: "GOLD" }
- *   "EUR/USD OTC" → { query: "EUR/USD", wantsOtc: true,  fullName: "EUR/USD OTC" }
+ * Builds the exact search query to type into Quotex's picker search input.
+ * CRITICAL: "OTC" is completely stripped so Quotex search never hides results.
  */
-function buildSearchQuery(rawTicker: string): { query: string; wantsOtc: boolean; fullName: string } {
-  if (!rawTicker || typeof rawTicker !== 'string') return { query: '', wantsOtc: false, fullName: '' };
+export function buildSearchQuery(rawTicker: string): { query: string; fullName: string } {
+  if (!rawTicker || typeof rawTicker !== 'string') return { query: '', fullName: '' };
 
-  let cleaned = rawTicker.trim();
+  let cleaned = stripPayoutAndNoise(rawTicker);
 
-  // Remove timeframe suffixes (1M, 5M, 1 MIN, etc.)
+  // Remove timeframe suffixes
   cleaned = cleaned
-    .replace(/\b(?:1M|2M|3M|5M|15M|30M|1\s*MIN(?:UTE)?S?|2\s*MIN(?:UTE)?S?|3\s*MIN(?:UTE)?S?|5\s*MIN(?:UTE)?S?|15\s*MIN(?:UTE)?S?|NOW)\b/gi, '')
+    .replace(/\b(?:1M|2M|3M|5M|15M|30M|1H|1\s*MIN(?:UTE)?S?|2\s*MIN(?:UTE)?S?|3\s*MIN(?:UTE)?S?|5\s*MIN(?:UTE)?S?|15\s*MIN(?:UTE)?S?|NOW)\b/gi, '')
+    .replace(/\(\s*OTC\s*\)/gi, '')
+    .replace(/\[\s*OTC\s*\]/gi, '')
+    .replace(/\bOTC\b/gi, '')
+    .replace(/[\(\)\[\]]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Extract and strip OTC flag
-  const wantsOtc = /\bOTC\b/i.test(cleaned);
-  const withoutOtc = cleaned.replace(/\bOTC\b/gi, '').trim();
-
   let basePair: string;
 
-  // If it already has a slash, keep it as-is
-  if (withoutOtc.includes('/')) {
-    basePair = withoutOtc.toUpperCase();
-  }
-  // Space-separated pair: "USD CHF" → "USD/CHF"
-  else {
-    const spaceParts = withoutOtc.split(/\s+/).filter(Boolean);
+  if (cleaned.includes('/')) {
+    basePair = cleaned.toUpperCase();
+  } else {
+    const spaceParts = cleaned.split(/\s+/).filter(Boolean);
     if (spaceParts.length === 2 && spaceParts[0]!.length >= 2 && spaceParts[0]!.length <= 5 && spaceParts[1]!.length >= 2 && spaceParts[1]!.length <= 5) {
       basePair = `${spaceParts[0]}/${spaceParts[1]}`.toUpperCase();
-    }
-    // Concatenated 6-letter pair: "EURUSD" → "EUR/USD"
-    else if (withoutOtc.length === 6 && /^[A-Za-z]+$/.test(withoutOtc)) {
-      basePair = `${withoutOtc.slice(0, 3)}/${withoutOtc.slice(3, 6)}`.toUpperCase();
-    }
-    // Single ticker (GOLD, BTC, AAPL, etc.)
-    else {
-      basePair = withoutOtc.toUpperCase();
+    } else if (cleaned.length === 6 && /^[A-Za-z]+$/.test(cleaned)) {
+      basePair = `${cleaned.slice(0, 3)}/${cleaned.slice(3, 6)}`.toUpperCase();
+    } else {
+      basePair = cleaned.toUpperCase();
     }
   }
 
+  // Translate stock/commodity symbols to friendly search terms if known
+  let searchWord = basePair;
+  const upperBase = basePair.replace(/[^A-Z0-9]/g, '');
+  if (upperBase === 'AAPL') searchWord = 'Apple';
+  else if (upperBase === 'MSFT') searchWord = 'Microsoft';
+  else if (upperBase === 'GOOGL' || upperBase === 'GOOG') searchWord = 'Google';
+  else if (upperBase === 'AMZN') searchWord = 'Amazon';
+  else if (upperBase === 'META' || upperBase === 'FB') searchWord = 'Meta';
+  else if (upperBase === 'TSLA') searchWord = 'Tesla';
+  else if (upperBase === 'NVDA') searchWord = 'Nvidia';
+  else if (upperBase === 'BA') searchWord = 'Boeing';
+  else if (upperBase === 'INTC') searchWord = 'Intel';
+  else if (upperBase === 'PFE') searchWord = 'Pfizer';
+  else if (upperBase === 'JNJ') searchWord = 'Johnson';
+  else if (upperBase === 'MCD') searchWord = 'McDonald';
+  else if (upperBase === 'XAU' || upperBase === 'XAUUSD' || upperBase === 'GOLD') searchWord = 'Gold';
+  else if (upperBase === 'XAG' || upperBase === 'XAGUSD' || upperBase === 'SILVER') searchWord = 'Silver';
+  else if (upperBase === 'USCRUDE' || upperBase === 'WTI') searchWord = 'Crude';
+  else if (upperBase === 'UKBRENT' || upperBase === 'BRENT') searchWord = 'Brent';
+  else if (upperBase === 'BTC' || upperBase === 'BTCUSD') searchWord = 'Bitcoin';
+  else if (upperBase === 'ETH' || upperBase === 'ETHUSD') searchWord = 'Ethereum';
+
   return {
-    query: basePair,              // What goes into the search box (NO OTC)
-    wantsOtc,                     // Whether to prefer the OTC result
-    fullName: wantsOtc ? `${basePair} OTC` : basePair,  // For logging & matching
+    query: searchWord,
+    fullName: rawTicker.trim(),
   };
+}
+
+/**
+ * Generates an ordered list of search candidate queries for Quotex's picker search box.
+ * Examples:
+ *   "USD COP OTC" -> ["USD/COP", "USD COP", "COP", "USDCOP"]
+ *   "EUR USD"     -> ["EUR/USD", "EUR USD", "EURUSD"]
+ *   "AAPL"        -> ["Apple", "AAPL"]
+ *   "GOLD"        -> ["Gold", "XAU", "XAU/USD"]
+ */
+export function getSearchQueriesForTicker(rawTicker: string): string[] {
+  if (!rawTicker) return [];
+  const { query } = buildSearchQuery(rawTicker);
+  const queries: string[] = [];
+  if (query) queries.push(query);
+
+  const clean = stripPayoutAndNoise(rawTicker)
+    .replace(/\(\s*OTC\s*\)/gi, '')
+    .replace(/\[\s*OTC\s*\]/gi, '')
+    .replace(/\bOTC\b/gi, '')
+    .replace(/[^A-Za-z0-9\/\s]/g, '')
+    .trim();
+
+  if (clean.includes('/')) {
+    const parts = clean.split('/').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 2) {
+      queries.push(`${parts[0]}/${parts[1]}`);
+      queries.push(`${parts[0]} ${parts[1]}`);
+      queries.push(`${parts[0]}${parts[1]}`);
+      if (parts[1]!.length >= 3 && parts[0]!.toUpperCase() === 'USD') {
+        queries.push(parts[1]!);
+      }
+    }
+  } else {
+    const spaceParts = clean.split(/\s+/).filter(Boolean);
+    if (spaceParts.length === 2 && spaceParts[0]!.length >= 2 && spaceParts[1]!.length >= 2) {
+      queries.push(`${spaceParts[0]}/${spaceParts[1]}`);
+      queries.push(`${spaceParts[0]} ${spaceParts[1]}`);
+      queries.push(`${spaceParts[0]}${spaceParts[1]}`);
+      if (spaceParts[1]!.length >= 3 && spaceParts[0]!.toUpperCase() === 'USD') {
+        queries.push(spaceParts[1]!);
+      }
+    } else if (clean.length === 6 && /^[A-Za-z]+$/.test(clean)) {
+      const p1 = clean.slice(0, 3);
+      const p2 = clean.slice(3, 6);
+      queries.push(`${p1}/${p2}`);
+      queries.push(`${p1} ${p2}`);
+      queries.push(`${p1}${p2}`);
+      if (p2.length >= 3 && p1.toUpperCase() === 'USD') {
+        queries.push(p2);
+      }
+    }
+  }
+
+  // Stock / Commodity fallbacks
+  const upper = clean.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (upper === 'AAPL') queries.push('AAPL');
+  else if (upper === 'MSFT') queries.push('MSFT');
+  else if (upper === 'BA') queries.push('BA');
+  else if (upper === 'NVDA') queries.push('NVDA');
+  else if (upper === 'TSLA') queries.push('TSLA');
+  else if (upper === 'GOLD' || upper === 'XAU' || upper === 'XAUUSD') queries.push('XAU');
+
+  return Array.from(new Set(queries.filter(Boolean)));
 }
 
 function ensureDirectories(): void {
@@ -347,400 +477,455 @@ export async function closeWarmBrowser(): Promise<void> {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * MARKET SWITCHING ENGINE — REBUILT FROM SCRATCH
+ * MARKET SWITCHING ENGINE — RECREATED FROM SCRATCH
  * ═══════════════════════════════════════════════════════════════════════
  *
  * Architecture:
- *   1. readActiveMarketFromDOM()  — Reads what Quotex currently shows
- *   2. openMarketPicker()         — Opens the asset picker reliably
- *   3. searchAndSelectMarket()    — Types query & clicks correct result
- *   4. verifyMarketSwitched()     — Confirms the switch happened
- *   5. selectMarket()             — Orchestrates the full flow
- *
- * Every step has its own timeout, fallback strategy, and error handling.
- * The memory cache is ONLY updated after DOM verification confirms success.
+ *   1. readActiveMarketFromDOM()  — Reads active asset from Quotex header / active tab
+ *   2. switchViaOpenTab()         — Fast-path: clicks already-open tab (<30ms)
+ *   3. openMarketPicker()         — Targets exact '+' button (excluding Deposit)
+ *   4. searchAndSelectMarket()    — Types clean query (no OTC) & clicks result
+ *   5. verifyMarketSwitched()     — Confirms active market via cleaned DOM
+ *   6. selectMarket()             — Orchestrates tab fast-path and modal fallback
  * ═══════════════════════════════════════════════════════════════════════
  */
 
 /**
- * Step 1: Reads the currently active market name directly from the Quotex DOM.
- * Returns the raw text shown on screen (e.g. "EUR/USD (OTC)", "Gold", "BTC/USD").
- * Returns null if it can't read it.
+ * Reads the active market name directly from the Quotex header / active tab.
  */
 async function readActiveMarketFromDOM(page: Page): Promise<string | null> {
   try {
     const domText = await page.evaluate(() => {
-      // Quotex displays the active asset name in the trading header area.
-      // We try multiple known selector patterns from most specific to generic.
-      const selectors = [
-        // Quotex-specific: the clickable pair name in the header
-        '.pair-name',
+      // 1. Primary: Check document.title which is the most reliable source
+      const title = document.title || '';
+      if (title.includes('Quotex - Trade ')) {
+        const titlePair = title.split('Quotex - Trade ')[1]?.split(' (')[0]?.trim();
+        if (titlePair) {
+           return titlePair;
+        }
+      }
+
+      // 1. Primary: Check active tab in top tab bar
+      const activeTabSelectors = [
+        '#tab-active', // Golden standard for modern Quotex active tab
+        '.header-sub__tab--active',
+        '.tab--active',
+        '.tab.active',
+        '.tabs__item--active',
+        '.tabs__item.active',
+        '[class*="tab--active"]',
+        '[class*="tabs__item--active"]',
+        '[class*="active-tab"]',
+        '.assets-table__item--active',
+        '[aria-selected="true"]',
+      ];
+
+      for (const sel of activeTabSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.textContent) {
+          const raw = el.textContent.trim();
+          if (!raw.toLowerCase().includes('deposit')) {
+            const clean = raw.replace(/\+?\d{1,3}\s*%/g, '').trim();
+            if (clean.length >= 2 && clean.length <= 40 && /[A-Za-z]/.test(clean)) {
+              return clean;
+            }
+          }
+        }
+      }
+
+      // 2. Secondary: Check header pair title / asset selector
+      const headerSelectors = [
         '.current-asset',
+        '.pair-name',
         '[class*="current-asset"]',
+        '[class*="pair-name"]',
         '.assets-select',
         '[class*="assets-select"]',
         '.trading-pair',
-        // Generic fallback: any element that looks like an asset display
-        '[class*="pair-name"]',
         '[class*="trading-pair"]',
+        '.tab__text',
+        '.section-deal__asset',
       ];
 
-      for (const sel of selectors) {
+      for (const sel of headerSelectors) {
         const el = document.querySelector(sel);
         if (el && el.textContent) {
-          const text = el.textContent.trim();
-          // Sanity check: a valid market name is 3-30 chars and contains letters
-          if (text.length >= 3 && text.length <= 30 && /[A-Za-z]/.test(text)) {
-            return text;
+          const raw = el.textContent.trim();
+          if (!raw.toLowerCase().includes('deposit')) {
+            const clean = raw.replace(/\+?\d{1,3}\s*%/g, '').trim();
+            if (clean.length >= 2 && clean.length <= 40 && /[A-Za-z]/.test(clean)) {
+              return clean;
+            }
           }
         }
       }
       return null;
     });
-    return domText;
+    return domText ? stripPayoutAndNoise(domText) : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Step 2: Opens the Quotex asset/market picker modal.
- * Tries multiple strategies and waits for the picker to actually appear.
- * Returns true if the picker was successfully opened.
+ * Fast-path: Checks if target market is already open as a tab in the top tab bar.
+ * If already active -> returns true instantly (0ms).
+ * If open but inactive -> clicks tab directly (<30ms) without opening picker.
+ */
+async function switchViaOpenTab(page: Page, targetTicker: string): Promise<boolean> {
+  try {
+    const targetCanon = canonicalize(targetTicker);
+    if (!targetCanon) return false;
+
+    const result = await page.evaluate(
+      ({ targetCanon }) => {
+        function canon(s: string): string {
+          return s
+            .replace(/\+?\d{1,3}\s*%/g, '')
+            .toUpperCase()
+            .replace(/\bOTC\b/g, '')
+            .replace(/[^A-Z0-9]/g, '');
+        }
+
+        // Find tabs strictly within the specific container provided by the user
+        const tabs = document.querySelectorAll('.OK1xf .Q02Z1 [data-symbol], .Q02Z1 [data-symbol], .OK1xf [data-symbol]');
+        
+        for (const tab of tabs) {
+          // Look at the inner text container specifically
+          const nameContainer = tab.querySelector('.WRocw') || tab;
+          const text = (nameContainer.textContent || '').trim();
+          if (!text || text.toLowerCase().includes('deposit')) continue;
+
+          const tabCanon = canon(text);
+          if (tabCanon === targetCanon || (tabCanon.length >= 4 && (tabCanon.includes(targetCanon) || targetCanon.includes(tabCanon)))) {
+            
+            const isAlreadyActive = tab.id === 'tab-active' || tab.classList.contains('active') || tab.getAttribute('aria-selected') === 'true';
+            
+            if (!isAlreadyActive) {
+               // Dispatch standard synthetic events on the main wrapper
+               const clickTarget = tab as HTMLElement;
+               clickTarget.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+               clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+               clickTarget.click();
+               clickTarget.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true }));
+               clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            }
+            
+            return { matched: true, alreadyActive: isAlreadyActive };
+          }
+        }
+        return { matched: false, alreadyActive: false };
+      },
+      { targetCanon }
+    );
+
+    if (result.matched) {
+      if (result.alreadyActive) {
+        logger.browser(`⚡ Market "${targetTicker}" is already active in top tab bar.`);
+      } else {
+        logger.browser(`⚡ Switched to "${targetTicker}" instantly via open tab.`);
+        await page.waitForTimeout(200);
+      }
+      setActiveMarket(targetTicker);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logger.warn('⚠️ Error in switchViaOpenTab:', error);
+    return false;
+  }
+}
+
+/**
+ * Opens Quotex asset/market picker modal.
+ * Uses exact user '+' button HTML and explicitly avoids the Deposit button.
  */
 async function openMarketPicker(page: Page): Promise<boolean> {
-  // Strategy A: Click known opener elements via Playwright locators
-  const openerSelectors = [
-    '.pair-name',
-    '.current-asset',
-    '[class*="current-asset"]',
-    '.assets-select',
-    '[class*="assets-select"]',
-    '.trading-pair',
-    '[class*="pair-name"]',
-    '[class*="trading-pair"]',
-  ];
-
-  for (const sel of openerSelectors) {
-    try {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 400 }).catch(() => false)) {
-        await btn.click({ force: true });
-        // Wait briefly for picker animation
-        await page.waitForTimeout(400);
-
-        // Check if a search input appeared (strong signal the picker is open)
-        const hasSearch = await page
-          .locator('input[placeholder*="Search" i], input[type="search"], input[class*="search" i]')
-          .first()
-          .isVisible({ timeout: 1500 })
-          .catch(() => false);
-
-        if (hasSearch) {
-          logger.browser(`📂 Market picker opened via: ${sel}`);
-          return true;
-        }
-      }
-    } catch {
-      // Try next selector
+  // Strategy A: Click exact '+' add asset button (excluding Deposit button)
+  const isOpened = await page.evaluate(() => {
+    // 1. Exact button class matching user snippet: CAZSg wupmB BEz9j
+    const exactPlus = document.querySelector('button.CAZSg, button.BEz9j, button.wupmB') as HTMLButtonElement | null;
+    if (exactPlus && !exactPlus.textContent?.toLowerCase().includes('deposit')) {
+      exactPlus.click();
+      return true;
     }
-  }
 
-  // Strategy B: JavaScript fallback — click via DOM query
-  const jsOpened = await page.evaluate(() => {
-    const candidates = [
-      document.querySelector('[class*="current-asset"]'),
-      document.querySelector('[class*="assets-select"]'),
+    // 2. Scan all buttons for plus icon, strictly excluding Deposit button
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = (btn.textContent || '').trim().toLowerCase();
+      // Strictly skip Deposit button
+      if (text.includes('deposit') || btn.querySelector('span.oQ4Z4')?.textContent?.toLowerCase().includes('deposit')) {
+        continue;
+      }
+
+      // Check for plus icon
+      const hasPlusSvg = btn.querySelector('svg.icon-plus, svg[class*="plus" i], use[*|href*="icon-plus"]');
+      if (hasPlusSvg) {
+        btn.click();
+        return true;
+      }
+    }
+
+    // 3. Header pair name / current asset button fallback
+    const headerOpeners = [
       document.querySelector('.pair-name'),
-      document.querySelector('.trading-pair'),
-      document.querySelector('[class*="pair-name"]'),
-      document.querySelector('[class*="trading-pair"]'),
+      document.querySelector('.current-asset'),
+      document.querySelector('[class*="current-asset"]'),
+      document.querySelector('.assets-select'),
+      document.querySelector('[class*="assets-select"]'),
+      document.querySelector('.tab--active'),
     ];
-    for (const el of candidates) {
-      if (el && el instanceof HTMLElement) {
+    for (const el of headerOpeners) {
+      if (el && el instanceof HTMLElement && !el.textContent?.toLowerCase().includes('deposit')) {
         el.click();
         return true;
       }
     }
+
     return false;
   });
 
-  if (jsOpened) {
-    await page.waitForTimeout(600);
-    // Check if search input appeared
-    const hasSearch = await page
+  if (isOpened) {
+    await page.waitForTimeout(400);
+    const searchVisible = await page
       .locator('input[placeholder*="Search" i], input[type="search"], input[class*="search" i]')
       .first()
       .isVisible({ timeout: 1500 })
       .catch(() => false);
-    if (hasSearch) {
-      logger.browser('📂 Market picker opened via JS fallback');
+
+    if (searchVisible) {
+      logger.browser('📂 Market picker modal opened successfully.');
       return true;
     }
   }
 
-  // Strategy C: Try clicking a "+" button that some Quotex versions use
+  // Strategy B: Playwright locator fallback
   try {
-    // Exclude the "Deposit" button which also has a plus icon
-    const plusBtn = page.locator('button:has(svg[class*="plus"]):not(:has-text("Deposit")), button:has(svg[class*="Plus"]):not(:has-text("Deposit"))').first();
+    const plusBtn = page.locator('button.CAZSg, button.BEz9j, button:has(svg.icon-plus):not(:has-text("Deposit"))').first();
     if (await plusBtn.isVisible({ timeout: 400 }).catch(() => false)) {
       await plusBtn.click({ force: true });
-      await page.waitForTimeout(500);
-      logger.browser('📂 Market picker opened via plus button');
+      await page.waitForTimeout(400);
       return true;
     }
-  } catch {
-    // Continue
-  }
+  } catch {}
 
-  logger.warn('⚠️ Could not open market picker with any strategy');
+  logger.warn('⚠️ Could not open market picker with any opener strategy.');
   return false;
 }
 
 /**
- * Step 3: Types the search query into the picker and clicks the best matching result.
- * Results are STRICTLY scoped to the picker container — never clicks random page elements.
- * Returns true if a result was clicked.
+ * Types clean search query into picker and clicks the matching market row.
+ * Uses exact Quotex search table DOM structure (.yejPg, .R2Rgm, .vPvlJ, span.Z2fyK, .teoXG, .e4qZ6).
  */
-async function searchAndSelectMarket(page: Page, searchQuery: string, wantsOtc: boolean): Promise<boolean> {
-  // Find the search input inside the picker
+async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<boolean> {
   const searchInput = page
     .locator('input[placeholder*="Search" i], input[type="search"], input[class*="search" i]')
     .first();
 
   const isSearchVisible = await searchInput.isVisible({ timeout: 2000 }).catch(() => false);
   if (!isSearchVisible) {
-    logger.warn('⚠️ Search input not found in market picker');
+    logger.warn('⚠️ Search input not found in market picker.');
     return false;
   }
 
-  // CRITICAL: Only type the base pair name (e.g. "EUR/USD"), NEVER "OTC".
-  // Quotex search doesn't understand "OTC" and will show zero results.
-  // We use the wantsOtc flag in the scoring logic to pick the right variant.
-  await searchInput.click();
-  await searchInput.fill('');
-  await page.waitForTimeout(100);
-  await searchInput.fill(searchQuery);
-  logger.browser(`🔍 Typed "${searchQuery}" into picker search box (wantsOtc=${wantsOtc})`);
+  const queries = getSearchQueriesForTicker(targetTicker);
+  const targetCanon = canonicalize(targetTicker);
 
-  // Wait for search results to render
-  await page.waitForTimeout(800);
+  for (const searchQuery of queries) {
+    await searchInput.click();
+    await searchInput.fill('');
+    await searchInput.pressSequentially(searchQuery, { delay: 20 });
+    
+    // Dispatch input & change events for reactive frameworks
+    await searchInput.evaluate((el: HTMLInputElement) => {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    });
+    
+    logger.browser(`🔍 Typed "${searchQuery}" into picker search box`);
+    await page.waitForTimeout(400);
 
-  // Attempt to click the best matching result using scoped DOM search
-  const searchCanonical = canonicalize(searchQuery);
-  const hasOtcInQuery = wantsOtc;
+    const clicked = await page.evaluate(
+      ({ targetCanon }) => {
+        function canon(s: string): string {
+          return s
+            .replace(/\+?\d{1,3}\s*%/g, '')
+            .toUpperCase()
+            .replace(/\bOTC\b/g, '')
+            .replace(/[^A-Z0-9]/g, '');
+        }
 
-  const clicked = await page.evaluate(
-    ({ searchCanonical, hasOtcInQuery }) => {
-      /**
-       * Helper: Canonicalize inside the browser context
-       */
-      function canon(s: string): string {
-        return s.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      }
-
-      /**
-       * Helper: Check if an element is inside a picker/modal/dropdown container
-       */
-      function isInsidePicker(el: Element): boolean {
-        const container = el.closest(
-          '[class*="modal"], [class*="picker"], [class*="dropdown"], ' +
-          '[class*="popup"], [class*="overlay"], [class*="dialog"], ' +
-          '[class*="list"], [class*="search-result"], [class*="select"], ' +
-          '[role="dialog"], [role="listbox"], [role="menu"]'
+        // 1. Primary: Exact Quotex Asset Row & Name Selectors (.R2Rgm, .vPvlJ, span.Z2fyK, .teoXG, .e4qZ6)
+        const primaryRows = document.querySelectorAll(
+          '.yejPg .R2Rgm, .yejPg .vPvlJ, .R2Rgm, .vPvlJ, .teoXG, .e4qZ6, span.Z2fyK'
         );
-        return container !== null;
-      }
 
-      /**
-       * Helper: Score how well a DOM element matches our target
-       * Higher score = better match. -1 = no match.
-       */
-      function scoreMatch(el: Element): number {
-        const text = (el.textContent || '').trim();
-        if (!text || text.length < 3 || text.length > 50) return -1;
+        for (const el of primaryRows) {
+          const nameSpan = el.querySelector('span.Z2fyK, .teoXG span, .e4qZ6 span') || el;
+          const text = (nameSpan.textContent || '').trim();
+          if (!text) continue;
 
-        const textCanon = canon(text);
-        if (!textCanon) return -1;
-
-        // Must be inside a picker, not random page content
-        if (!isInsidePicker(el)) return -1;
-
-        // Must be a reasonably-sized clickable element (not a giant container)
-        const rect = el.getBoundingClientRect();
-        if (rect.height > 100 || rect.height < 10 || rect.width < 30) return -1;
-
-        // Exact canonical match: highest score
-        if (textCanon === searchCanonical) return 100;
-
-        // Check OTC consistency: if query has OTC, result must have OTC and vice versa
-        const resultHasOtc = textCanon.includes('OTC');
-        if (hasOtcInQuery !== resultHasOtc) return -1;
-
-        // Base pair match (strip OTC from both)
-        const queryBase = searchCanonical.replace('OTC', '');
-        const resultBase = textCanon.replace('OTC', '');
-        if (queryBase === resultBase) return 90;
-
-        // Partial match: query is contained in result
-        if (textCanon.includes(searchCanonical)) return 70;
-
-        // Partial match: result starts with query
-        if (textCanon.startsWith(searchCanonical.replace('OTC', ''))) return 50;
-
-        return -1;
-      }
-
-      // Scan all potentially clickable elements inside the picker
-      const candidates = document.querySelectorAll(
-        'li, a, [class*="item"], [class*="pair"], [class*="asset"], ' +
-        '[class*="result"], [class*="option"], [role="option"], ' +
-        '[class*="row"], button'
-      );
-
-      let bestEl: HTMLElement | null = null;
-      let bestScore = -1;
-
-      for (const el of candidates) {
-        const score = scoreMatch(el);
-        if (score > bestScore) {
-          bestScore = score;
-          bestEl = el as HTMLElement;
+          const textCanon = canon(text);
+          if (textCanon === targetCanon || textCanon.includes(targetCanon) || targetCanon.includes(textCanon)) {
+            const targetToClick = (el.querySelector('span.Z2fyK, .teoXG, .e4qZ6') || el) as HTMLElement;
+            const rect = targetToClick.getBoundingClientRect();
+            return { x: rect.x + (rect.width / 2), y: rect.y + (rect.height / 2) };
+          }
         }
-      }
 
-      if (bestEl && bestScore > 0) {
-        bestEl.click();
-        return true;
-      }
+        // 2. Secondary: Generalized Fallback Scanner
+        function scoreMatch(el: Element): number {
+          const text = (el.textContent || '').trim();
+          if (!text) return -1;
+          const lower = text.toLowerCase();
+          if (lower.includes('deposit') || lower.includes('withdraw') || lower.includes('live account') || lower.includes('demo account')) {
+            return -1;
+          }
 
-      // Broader fallback: scan ALL elements but only inside picker containers
-      const allElements = document.querySelectorAll('div, span');
-      for (const el of allElements) {
-        const score = scoreMatch(el);
-        if (score >= 70) {
-          (el as HTMLElement).click();
-          return true;
+          const rect = el.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0 || rect.height > 150) return -1;
+
+          const textCanon = canon(text);
+          if (!textCanon) return -1;
+
+          if (textCanon === targetCanon) return 100;
+          if (textCanon.includes(targetCanon)) return 85;
+          if (targetCanon.includes(textCanon) && textCanon.length >= 4) return 75;
+
+          return -1;
         }
-      }
 
-      return false;
-    },
-    { searchCanonical, hasOtcInQuery }
-  );
+        const candidates = document.querySelectorAll(
+          'li, a, tr, [class*="item"], [class*="pair"], [class*="asset"], ' +
+          '[class*="result"], [class*="option"], [role="option"], [role="row"], button, div.tab'
+        );
 
-  if (clicked) {
-    logger.browser(`✅ Clicked search result for "${searchQuery}"`);
-    // Wait for picker to close and market to load
-    await page.waitForTimeout(500);
-    return true;
-  }
+        let bestEl: HTMLElement | null = null;
+        let bestScore = -1;
 
-  // Playwright text locator fallback (scoped attempts)
-  try {
-    const textLoc = page.getByText(searchQuery, { exact: false }).first();
-    if (await textLoc.isVisible({ timeout: 800 }).catch(() => false)) {
-      await textLoc.click({ force: true });
-      logger.browser(`✅ Clicked result via Playwright text locator for "${searchQuery}"`);
-      await page.waitForTimeout(500);
+        for (const el of candidates) {
+          const score = scoreMatch(el);
+          if (score > bestScore) {
+            bestScore = score;
+            bestEl = el as HTMLElement;
+          }
+        }
+
+        if (bestEl && bestScore > 0) {
+          const rect = bestEl.getBoundingClientRect();
+          return { x: rect.x + (rect.width / 2), y: rect.y + (rect.height / 2) };
+        }
+
+        return null;
+      },
+      { targetCanon }
+    );
+
+    if (clicked && clicked.x && clicked.y) {
+      await page.mouse.click(clicked.x, clicked.y);
+      logger.browser(`✅ Clicked search result for "${searchQuery}" at ${Math.round(clicked.x)}, ${Math.round(clicked.y)}`);
       return true;
     }
-  } catch {
-    // Ignore
+
+    // Playwright text locator fallback
+    try {
+      const textLoc = page.locator('.R2Rgm, .vPvlJ, .yejPg, .teoXG, span.Z2fyK, body').getByText(searchQuery, { exact: false }).first();
+      if (await textLoc.isVisible({ timeout: 400 }).catch(() => false)) {
+        await textLoc.click({ force: true });
+        logger.browser(`✅ Clicked result via Playwright text locator for "${searchQuery}"`);
+        return true;
+      }
+    } catch {}
   }
 
-  logger.warn(`⚠️ Could not find "${searchQuery}" in picker search results`);
+  logger.warn(`⚠️ Could not find matches for any query: [${queries.join(', ')}] in picker results.`);
   return false;
 }
 
 /**
- * Step 4: Verifies the market switch actually happened by re-reading the DOM.
- * Returns true if the currently displayed market matches our target.
+ * Verifies that the market switch happened by polling active DOM state (up to 2500ms).
  */
-async function verifyMarketSwitched(page: Page, targetTicker: string): Promise<boolean> {
-  // Give the UI a moment to settle after the switch
-  await page.waitForTimeout(300);
-
-  const currentMarket = await readActiveMarketFromDOM(page);
-  if (!currentMarket) {
-    logger.warn('⚠️ Could not read current market from DOM for verification');
-    return false;
+async function verifyMarketSwitched(page: Page, targetTicker: string, maxWaitMs: number = 2500): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const currentMarket = await readActiveMarketFromDOM(page);
+    if (currentMarket && tickersMatch(targetTicker, currentMarket)) {
+      logger.browser(`✅ VERIFIED: Market is now "${currentMarket}"`);
+      setActiveMarket(currentMarket);
+      return true;
+    }
+    await page.waitForTimeout(100);
   }
 
-  if (tickersMatch(targetTicker, currentMarket)) {
-    logger.browser(`✅ VERIFIED: Market is now "${currentMarket}"`);
-    setActiveMarket(currentMarket);
+  const finalCheck = await readActiveMarketFromDOM(page);
+  if (finalCheck && tickersMatch(targetTicker, finalCheck)) {
+    logger.browser(`✅ VERIFIED: Market is now "${finalCheck}"`);
+    setActiveMarket(finalCheck);
     return true;
   }
 
-  logger.warn(`⚠️ Verification failed: Expected "${targetTicker}", but DOM shows "${currentMarket}"`);
+  logger.warn(`⚠️ Verification: Expected "${targetTicker}", DOM shows "${finalCheck || 'unreadable'}"`);
   return false;
 }
 
 /**
- * ═══════════════════════════════════════════════════════════════════════
- * MAIN ORCHESTRATOR: selectMarket()
- * ═══════════════════════════════════════════════════════════════════════
- *
- * Full flow:
- *   1. Build the search query (preserves OTC, formats pair correctly)
- *   2. Check DOM for current market (never trust cache alone)
- *   3. If already on the correct market → skip
- *   4. Open the asset picker
- *   5. Search and click the target market
- *   6. Verify the switch happened
- *   7. If verification fails → retry once
- *   8. Close any lingering picker modals
+ * Main Orchestrator: selectMarket()
  */
 async function selectMarket(page: Page, rawTicker: string): Promise<void> {
-  // Build the search query — strips OTC from search text but tracks it as a flag
-  const { query: searchQuery, wantsOtc, fullName } = buildSearchQuery(rawTicker);
+  const { query: searchQuery, fullName } = buildSearchQuery(rawTicker);
   if (!searchQuery) {
-    logger.warn(`selectMarket: Empty search query from raw ticker "${rawTicker}"`);
+    logger.warn(`selectMarket: Empty search query for "${rawTicker}"`);
     return;
   }
 
-  logger.browser(`🔄 Market switch requested: "${rawTicker}" → search: "${searchQuery}" (OTC: ${wantsOtc})`);
+  logger.browser(`🔄 Market switch requested: "${rawTicker}" (target: "${fullName}")`);
 
-  // ── Step 1: Check if already on the correct market via DOM ──────────
+  // 1. Check DOM current market
   const currentDomMarket = await readActiveMarketFromDOM(page);
   if (currentDomMarket && tickersMatch(fullName, currentDomMarket)) {
-    logger.browser(`⚡ Market "${currentDomMarket}" is already active (verified from DOM). Skipping switch!`);
+    logger.browser(`⚡ Market "${currentDomMarket}" is already active. Skipping switch.`);
     setActiveMarket(currentDomMarket);
     return;
   }
 
-  // ── Step 2: Also check memory cache (but only if fresh) ────────────
+  // 2. Check fresh memory cache
   const cachedMarket = getActiveMarket();
   if (cachedMarket && tickersMatch(fullName, cachedMarket)) {
-    // Cache says it matches, but let's trust it only if DOM check was inconclusive
     if (!currentDomMarket) {
-      logger.browser(`⚡ Market "${cachedMarket}" is active per memory cache (DOM unreadable). Skipping switch!`);
+      logger.browser(`⚡ Market "${cachedMarket}" is active per cache. Skipping switch.`);
       return;
     }
   }
 
-  // ── Step 3: Open picker, search, and select (with 1 retry) ─────────
+  // 3. Fast-path: Check open tabs in top bar
+  const switchedViaTab = await switchViaOpenTab(page, fullName);
+  if (switchedViaTab) {
+    // CRITICAL: We MUST verify it actually switched. The click might have failed.
+    const verified = await verifyMarketSwitched(page, fullName, 1500);
+    if (verified) return;
+    
+    logger.warn(`⚠️ Tab click failed to activate market. Falling back to picker...`);
+  }
+
+  // 4. Modal picker flow (with 1 retry)
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (attempt === 2) {
       logger.browser('🔁 Retrying market switch (attempt 2/2)...');
-      // Close any lingering modals before retry
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(300);
     }
 
-    // Open the picker
     const pickerOpened = await openMarketPicker(page);
     if (!pickerOpened) {
       logger.warn(`⚠️ Failed to open market picker (attempt ${attempt}/2)`);
       continue;
     }
 
-    // Search and click
-    const resultClicked = await searchAndSelectMarket(page, searchQuery, wantsOtc);
+    const resultClicked = await searchAndSelectMarket(page, fullName);
 
-    // Close any lingering picker
-    await page.keyboard.press('Escape').catch(() => {});
+    // Close any lingering modal
     await page.keyboard.press('Escape').catch(() => {});
 
     if (!resultClicked) {
@@ -748,17 +933,15 @@ async function selectMarket(page: Page, rawTicker: string): Promise<void> {
       continue;
     }
 
-    // Verify the switch
+    // Polling verification: returns true as soon as the DOM settles (<2500ms)
     const verified = await verifyMarketSwitched(page, fullName);
     if (verified) {
-      logger.browser(`🎯 Market successfully switched to "${fullName}" on attempt ${attempt}`);
+      logger.browser(`🎯 Market switched to "${fullName}" on attempt ${attempt}`);
       return;
     }
   }
 
-  // Both attempts failed — log but don't crash the trade
-  logger.warn(`❌ Market switch to "${fullName}" could not be verified after 2 attempts. Proceeding with current market.`);
-  // Close any remaining modals
+  logger.warn(`❌ Market switch to "${fullName}" unverified after 2 attempts. Proceeding.`);
   await page.keyboard.press('Escape').catch(() => {});
 }
 
@@ -1140,3 +1323,4 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
     clearTimeout(watchdogTimer!);
   }
 }
+

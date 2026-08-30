@@ -7,7 +7,7 @@ import { logger } from './logger.js';
 export function cleanTicker(raw?: string | null): string {
   if (!raw) return '';
   return raw
-    .replace(/\b(?:1M|2M|3M|5M|15M|30M|1H|1\s*MIN(?:UTE)?S?|2\s*MIN(?:UTE)?S?|3\s*MIN(?:UTE)?S?|5\s*MIN(?:UTE)?S?|15\s*MIN(?:UTE)?S?|NOW)\b/gi, '')
+    .replace(/\b(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|[0-9]+\s*H(?:OUR)?S?|NOW)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -114,6 +114,48 @@ export const VALID_CURRENCY_CODES = new Set([
   'BTC', 'ETH', 'LTC', 'XRP', 'SOL', 'DOGE', 'BNB',
   'GOLD', 'SILVER', 'OIL', 'BRENT', 'WTI', 'USCRUDE', 'UKBRENT'
 ]);
+
+/**
+ * In-Memory Signal Context State Machine
+ * Remembers recent tickers and durations across multi-message signal sequences
+ * (e.g. "USD BRL OTC" -> "2 minutes" -> "Down")
+ */
+interface SignalContextState {
+  ticker: string | null;
+  durationMinutes: number | undefined;
+  timestamp: number;
+}
+
+let activeSignalContext: SignalContextState = {
+  ticker: null,
+  durationMinutes: 1,
+  timestamp: 0,
+};
+
+const CONTEXT_EXPIRATION_MS = 180_000; // 3 minutes TTL for multi-message context
+
+export function getSignalContext(): SignalContextState {
+  if (activeSignalContext.ticker && Date.now() - activeSignalContext.timestamp > CONTEXT_EXPIRATION_MS) {
+    activeSignalContext.ticker = null;
+  }
+  return activeSignalContext;
+}
+
+export function updateSignalContext(partial: Partial<SignalContextState>): void {
+  activeSignalContext = {
+    ...activeSignalContext,
+    ...partial,
+    timestamp: Date.now(),
+  };
+}
+
+export function clearSignalContext(): void {
+  activeSignalContext = {
+    ticker: null,
+    durationMinutes: 1,
+    timestamp: 0,
+  };
+}
 
 /**
  * Validates whether a candidate string is a plausible trading asset / ticker.
@@ -226,7 +268,7 @@ function parseMultiLineSignal(rawText: string): TradeSignal | null {
 
     // Check for explicit Get Ready / Prepare trigger line
     if (
-      /^(?:GET\s+READY|PREPARE|STANDBY|STAND\s+BY|WARM[\s\-]*UP|WARMUP|BE\s+READY|ARE\s+YOU\s+READY|OPEN\s+(?:YOUR\s+)?PLATFORM)(?:\s+(?:FOR|ON|TO|IN))?(?:\s+(?:NEXT\s+)?(?:SIGNAL|TRADE|SESSION))?(?:\s+(?:GUYS|ALL|TEAM|EVERYONE))?(?:\s+(?:NOW|SOON|1M|5M))?$/i.test(
+      /^(?:GET\s+READY|PREPARE|STANDBY|STAND\s+BY|WARM[\s\-]*UP|WARMUP|BE\s+READY|ARE\s+YOU\s+READY|OPEN\s+(?:YOUR\s+)?PLATFORM)(?:\s+(?:FOR|ON|TO|IN))?(?:\s+(?:NEXT\s+)?(?:SIGNAL|TRADE|SESSION))?(?:\s+(?:GUYS|ALL|TEAM|EVERYONE))?(?:\s+(?:NOW|SOON|[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?))?$/i.test(
         cleaned
       )
     ) {
@@ -249,7 +291,7 @@ function parseMultiLineSignal(rawText: string): TradeSignal | null {
     // Check for action / direction line
     const actionMatch =
       cleaned.match(/(?:DIRECTION|ACTION|SIGNAL|CALL\/PUT|ENTRY)\s*[:\-]\s*(UP|DOWN|CALL|PUT|BUY|SELL)/i) ||
-      cleaned.match(/^(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+[0-9]+M|\s+[0-9]+\s*MIN(?:UTE)?S?|\s*NOW)?$/i);
+      cleaned.match(/^(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+[0-9]+\s*M|\s+[0-9]+\s*MIN(?:UTE)?S?|\s*NOW)?$/i);
     if (actionMatch && !action) {
       action = normalizeAction(actionMatch[1]);
       continue;
@@ -318,31 +360,39 @@ const SIGNAL_PATTERNS: Array<{
     }),
   },
   
-  // Pattern 0.5: ABORT / CANCEL / STOP TRIGGER
+  // Pattern 0.5: ABORT / CANCEL / STOP / CHANGE TRIGGER
   {
     name: 'ABORT_TRIGGER',
-    regex: /^(?:ABORT|CANCEL|STOP|IGNORE)$/i,
-    extract: (_match, rawText) => ({
-      action: 'ABORT',
-      ticker: 'ACTIVE',
-      rawText,
-      timestamp: new Date(),
-    }),
+    regex: /^(?:ABORT|CANCEL|STOP|IGNORE|CHANGE)$/i,
+    extract: (_match, rawText) => {
+      clearSignalContext();
+      return {
+        action: 'ABORT',
+        ticker: 'ACTIVE',
+        rawText,
+        timestamp: new Date(),
+      };
+    },
   },
 
-  // Pattern 0.6: SET DURATION TRIGGER
+  // Pattern 0.6: STANDALONE DURATION TRIGGER (e.g. "2 minutes", "1 minute", "5M", "CHANGE TIME TO 2M")
   {
     name: 'STANDALONE_DURATION',
-    regex: /^(?:CHANGE\s+(?:TIME|DURATION)\s+TO\s+)(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)$/i,
+    regex: /^(?:(?:CHANGE\s+(?:TIME|DURATION)\s+TO\s+)|(?:SET\s+TIME\s+TO\s+)|(?:TIME\s*:\s*))?(?:([0-9]+)\s*M|([0-9]+)\s*MIN(?:UTE)?S?|([0-9]+)\s*H(?:OUR)?S?)$/i,
     extract: (match, rawText) => {
       let durationMinutes = undefined;
       if (match[1]) durationMinutes = parseInt(match[1], 10);
       else if (match[2]) durationMinutes = parseInt(match[2], 10);
       else if (match[3]) durationMinutes = parseInt(match[3], 10) * 60;
       
+      if (durationMinutes !== undefined) {
+        updateSignalContext({ durationMinutes });
+      }
+
+      const ctx = getSignalContext();
       return {
         action: 'SET_DURATION',
-        ticker: 'ACTIVE',
+        ticker: ctx.ticker || 'ACTIVE',
         durationMinutes,
         rawText,
         timestamp: new Date(),
@@ -350,7 +400,7 @@ const SIGNAL_PATTERNS: Array<{
     },
   },
 
-  // Pattern 1: WARM-UP / GET READY TRIGGER (e.g. "Get ready", "GET READY: EUR/USD", "GET READY EUR/USD", "PREPARE USD CHF OTC", "STANDBY")
+  // Pattern 1: WARM-UP / GET READY TRIGGER (e.g. "Get ready", "GET READY: EUR/USD", "GET READY EUR/USD", "PREPARE USD CHF OTC", "STANDBY", "Open your Platform")
   {
     name: 'GET_READY_STANDBY_TRIGGER',
     regex:
@@ -363,11 +413,12 @@ const SIGNAL_PATTERNS: Array<{
         const cleanedCandidate = candidate
           .replace(/^(?:FOR\s+)?(?:NEXT\s+)?(?:SIGNAL|TRADE|SESSION|ENTRY|ORDER)S?/i, '')
           .replace(/\b(?:GUYS|ALL|TEAM|EVERYONE|TRADERS|BRO|MEMBERS|NOW|SOON|TODAY)\b/gi, '')
-          .replace(/\b(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?S?|5\s*MIN(?:UTES)?)\b/gi, '')
+          .replace(/\b(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|[0-9]+\s*H(?:OUR)?S?)\b/gi, '')
           .trim();
 
         if (cleanedCandidate && isValidTicker(cleanedCandidate)) {
           ticker = cleanTicker(cleanedCandidate).toUpperCase();
+          updateSignalContext({ ticker });
         }
       }
 
@@ -390,6 +441,7 @@ const SIGNAL_PATTERNS: Array<{
       if (!isValidTicker(rawCandidate)) return null;
 
       const ticker = cleanTicker(rawCandidate).toUpperCase();
+      updateSignalContext({ ticker });
       return {
         action: 'PREPARE',
         ticker,
@@ -399,16 +451,21 @@ const SIGNAL_PATTERNS: Array<{
     },
   },
 
-  // Pattern 2: STANDALONE DIRECTION (e.g. "UP", "DOWN", "CALL", "PUT", "UP 1M", "DOWN NOW", "1M UP", "1 MIN CALL")
+  // Pattern 2: STANDALONE DIRECTION (e.g. "Up", "Down", "Call", "Put", "UP 1M", "DOWN NOW", "1M UP", "1 MIN CALL")
   {
     name: 'STANDALONE_UP_DOWN',
     regex:
-      /^(?:(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:1M|2M|3M|5M|15M|M1|M2|M5|1\s*MIN(?:UTE)?S?|2\s*MIN(?:UTE)?S?|3\s*MIN(?:UTE)?S?|5\s*MIN(?:UTES)?|NOW))?|(?:1M|2M|3M|5M|15M|M1|M2|M5|1\s*MIN(?:UTE)?S?|5\s*MIN(?:UTES)?)\s+(UP|DOWN|CALL|PUT|BUY|SELL))$/i,
+      /^(?:(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|M[0-9]+|NOW))?|(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|M[0-9]+)\s+(UP|DOWN|CALL|PUT|BUY|SELL))$/i,
     extract: (match, rawText) => {
       const action = normalizeAction(match[1] || match[2]);
+      const ctx = getSignalContext();
+      const ticker = ctx.ticker || 'ACTIVE';
+      const durationMinutes = extractDurationMinutes(rawText) || ctx.durationMinutes || 1;
+
       return {
         action,
-        ticker: 'ACTIVE',
+        ticker,
+        durationMinutes,
         rawText,
         timestamp: new Date(),
       };
@@ -419,12 +476,17 @@ const SIGNAL_PATTERNS: Array<{
   {
     name: 'DIRECTION_LABEL_FORMAT',
     regex:
-      /^(?:DIRECTION|SIGNAL|ACTION|TRADE|ENTRY|CALL\/PUT)\s*[:\-]\s*(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:1M|2M|3M|5M|M1|1\s*MIN(?:UTE)?S?|NOW))?$/i,
+      /^(?:DIRECTION|SIGNAL|ACTION|TRADE|ENTRY|CALL\/PUT)\s*[:\-]\s*(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|NOW))?$/i,
     extract: (match, rawText) => {
       const action = normalizeAction(match[1]);
+      const ctx = getSignalContext();
+      const ticker = ctx.ticker || 'ACTIVE';
+      const durationMinutes = extractDurationMinutes(rawText) || ctx.durationMinutes || 1;
+
       return {
         action,
-        ticker: 'ACTIVE',
+        ticker,
+        durationMinutes,
         rawText,
         timestamp: new Date(),
       };
@@ -435,7 +497,7 @@ const SIGNAL_PATTERNS: Array<{
   {
     name: 'ACTION_WITH_TICKER',
     regex:
-      /^(UP|DOWN|CALL|PUT|BUY|SELL)\s+([A-Z0-9\.\-_\/]{2,10}(?:\s+[A-Z0-9\.\-_\/]{2,10})*(?:\s*OTC)?)(?:\s+(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?|NOW))?(?:\s*@\s*(\d+(?:\.\d+)?))?$/i,
+      /^(UP|DOWN|CALL|PUT|BUY|SELL)\s+([A-Z0-9\.\-_\/]{2,10}(?:\s+[A-Z0-9\.\-_\/]{2,10})*(?:\s*OTC)?)(?:\s+(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|NOW))?(?:\s*@\s*(\d+(?:\.\d+)?))?$/i,
     extract: (match, rawText) => {
       const rawCandidate = match[2];
       if (!isValidTicker(rawCandidate)) return null;
@@ -445,6 +507,7 @@ const SIGNAL_PATTERNS: Array<{
       const rawPrice = match[3];
       if (!ticker) return null;
 
+      updateSignalContext({ ticker });
       return {
         action,
         ticker,
@@ -455,11 +518,11 @@ const SIGNAL_PATTERNS: Array<{
     },
   },
 
-  // Pattern 4: TICKER WITH ACTION (e.g. "EUR/USD UP", "USD CHF OTC DOWN", "EUR USD 1M UP", "USD/CAD 5M PUT")
+  // Pattern 4: TICKER WITH ACTION (e.g. "EUR/USD UP", "USD CHF OTC DOWN", "EUR USD 1M UP", "USD/CAD 5M PUT", "USD/JPY 2 MIN PUT")
   {
     name: 'TICKER_WITH_ACTION',
     regex:
-      /^([A-Z0-9\.\-_\/]{2,10}(?:\s+[A-Z0-9\.\-_\/]{2,10})*(?:\s*OTC)?)(?:\s+(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?))?\s+(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?|NOW))?$/i,
+      /^([A-Z0-9\.\-_\/]{2,10}(?:\s+[A-Z0-9\.\-_\/]{2,10})*(?:\s*OTC)?)(?:\s+(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?))?\s+(UP|DOWN|CALL|PUT|BUY|SELL)(?:\s+(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|NOW))?$/i,
     extract: (match, rawText) => {
       const rawCandidate = match[1];
       if (!isValidTicker(rawCandidate)) return null;
@@ -468,6 +531,7 @@ const SIGNAL_PATTERNS: Array<{
       const action = normalizeAction(match[2]);
       if (!ticker) return null;
 
+      updateSignalContext({ ticker });
       return {
         action,
         ticker,
@@ -491,6 +555,7 @@ const SIGNAL_PATTERNS: Array<{
       const rawPrice = match[5];
       if (!rawAction || !ticker) return null;
 
+      updateSignalContext({ ticker });
       return {
         action: normalizeAction(rawAction),
         ticker,
@@ -517,6 +582,7 @@ const SIGNAL_PATTERNS: Array<{
       const stopLoss = match[5];
       if (!ticker) return null;
 
+      updateSignalContext({ ticker });
       return {
         action,
         ticker,
@@ -529,7 +595,7 @@ const SIGNAL_PATTERNS: Array<{
     },
   },
 
-  // Pattern 7: STANDALONE RAW TICKER (e.g. "USD MXN OTC", "USD BRL OTC", "EUR/USD", "USDJPY")
+  // Pattern 7: STANDALONE RAW TICKER (e.g. "USD MXN OTC", "USD BRL OTC", "EUR/USD", "USDJPY", "CAD CHF OTC", "USD INR OTC")
   {
     name: 'RAW_TICKER_PREPARE',
     regex: /^([A-Z0-9]{2,5}(?:[\s\/-]+[A-Z0-9]{2,5})+(?:\s*OTC)?|[A-Z]{3,10}(?:\s*OTC)|[A-Z]{6})$/i,
@@ -539,6 +605,9 @@ const SIGNAL_PATTERNS: Array<{
 
       const ticker = cleanTicker(rawCandidate)?.toUpperCase();
       if (!ticker) return null;
+
+      // Update signal context so subsequent "2 minutes" and "Up" inherit this ticker!
+      updateSignalContext({ ticker });
 
       return {
         action: 'PREPARE',
@@ -569,6 +638,9 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
     if (multiLineSignal) {
       const durationMinutes = extractDurationMinutes(cleanRaw);
       multiLineSignal.durationMinutes = durationMinutes;
+      if (multiLineSignal.ticker && multiLineSignal.ticker !== 'READY' && multiLineSignal.ticker !== 'ACTIVE') {
+        updateSignalContext({ ticker: multiLineSignal.ticker });
+      }
       logger.info(
         `Successfully parsed ${multiLineSignal.action} signal for ${multiLineSignal.ticker} using [STRUCTURED_MULTILINE]`
       );
@@ -582,23 +654,29 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
   const durationMinutes = extractDurationMinutes(cleanRaw);
 
   // If message was pure emoji or emoji + timeframe (e.g., "🟢", "🔴 1M", "🔼 NOW")
-  if (foundUp && !foundDown && (!cleaned || /^(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?|NOW)$/i.test(cleaned))) {
-    logger.info(`Successfully parsed UP signal for ACTIVE using [EMOJI_DIRECTION]`);
+  if (foundUp && !foundDown && (!cleaned || /^(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|NOW)$/i.test(cleaned))) {
+    const ctx = getSignalContext();
+    const ticker = ctx.ticker || 'ACTIVE';
+    const dur = durationMinutes || ctx.durationMinutes || 1;
+    logger.info(`Successfully parsed UP signal for ${ticker} using [EMOJI_DIRECTION]`);
     return {
       action: 'UP',
-      ticker: 'ACTIVE',
-      durationMinutes,
+      ticker,
+      durationMinutes: dur,
       rawText: cleanRaw,
       timestamp: new Date(),
     };
   }
 
-  if (foundDown && !foundUp && (!cleaned || /^(?:1M|2M|3M|5M|15M|1\s*MIN(?:UTE)?|5\s*MIN(?:UTES)?|NOW)$/i.test(cleaned))) {
-    logger.info(`Successfully parsed DOWN signal for ACTIVE using [EMOJI_DIRECTION]`);
+  if (foundDown && !foundUp && (!cleaned || /^(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|NOW)$/i.test(cleaned))) {
+    const ctx = getSignalContext();
+    const ticker = ctx.ticker || 'ACTIVE';
+    const dur = durationMinutes || ctx.durationMinutes || 1;
+    logger.info(`Successfully parsed DOWN signal for ${ticker} using [EMOJI_DIRECTION]`);
     return {
       action: 'DOWN',
-      ticker: 'ACTIVE',
-      durationMinutes,
+      ticker,
+      durationMinutes: dur,
       rawText: cleanRaw,
       timestamp: new Date(),
     };
@@ -611,7 +689,9 @@ export function parseSignal(rawMessage: string): TradeSignal | null {
       const signal = pattern.extract(match, cleanRaw);
       if (signal) {
         if (signal.ticker.length >= 1 && signal.ticker.length <= 30) {
-          signal.durationMinutes = durationMinutes; // inject duration
+          if (durationMinutes !== undefined && signal.durationMinutes === undefined) {
+            signal.durationMinutes = durationMinutes;
+          }
           logger.info(
             `Successfully parsed ${signal.action} signal for ${signal.ticker} using [${pattern.name}]`
           );

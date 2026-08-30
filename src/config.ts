@@ -3,6 +3,31 @@ import fs from 'node:fs';
 import type { AppConfig } from './types.js';
 import { logger } from './logger.js';
 
+// Auto-load .env if not loaded by runner
+function loadEnvFile(): void {
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      const lines = content.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx > 0) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed.slice(eqIdx + 1).trim().replace(/^["'](.*)["']$/, '$1');
+          if (!process.env[key]) {
+            process.env[key] = val;
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+loadEnvFile();
+
 export function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -14,8 +39,8 @@ export function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } 
     return { raw: trimmed, bigIntVal: 1234567890n };
   }
 
-  // Telegram supergroups and channels in Bot API often start with -100 (e.g. -1001234567890).
-  // In GramJS, PeerChannel.channelId is stored as positive BigInt (e.g. 1234567890n).
+  // Telegram supergroups and channels in Bot API often start with -100 (e.g. -1001771915378).
+  // In GramJS, PeerChannel.channelId is stored as positive BigInt (e.g. 1771915378n).
   let cleaned = trimmed;
   if (cleaned.startsWith('-100')) {
     cleaned = cleaned.slice(4);
@@ -113,7 +138,6 @@ export async function updateVipChannelId(newChannelId: string) {
   const envPath = path.resolve(process.cwd(), '.env');
   if (fs.existsSync(envPath)) {
     let envContent = await fs.promises.readFile(envPath, 'utf8');
-    // Replace VIP_CHANNEL_ID=... with the new value, or append if missing
     if (envContent.match(/^VIP_CHANNEL_ID=.*$/m)) {
       envContent = envContent.replace(/^VIP_CHANNEL_ID=.*$/m, `VIP_CHANNEL_ID=${raw}`);
     } else {

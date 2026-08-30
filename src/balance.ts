@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { AccountBalance, BalanceHistoryEntry } from './types.js';
 import { logger } from './logger.js';
+import { systemEvents } from './events.js';
 
 /**
  * Currency symbols and codes recognition dictionary
@@ -310,6 +311,13 @@ class BalanceManager {
     }
 
     this.printBalanceBox(newBalance, change);
+
+    // Real-time zero-reload broadcast to all connected dashboard clients
+    systemEvents.emit('balance:update', {
+      balance: newBalance,
+      change,
+      history: this.getBalanceHistory(),
+    });
   }
 
   /**

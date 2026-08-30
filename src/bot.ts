@@ -1,6 +1,6 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
-import { NewMessage, type NewMessageEvent } from 'telegram/events/index.js';
+import { NewMessage, type NewMessageEvent, Raw } from 'telegram/events/index.js';
 import { Api } from 'telegram/tl/index.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -11,6 +11,8 @@ import { executeAutomation, closeWarmBrowser } from './executor.js';
 import { automationQueue } from './queue.js';
 import { startDashboardServer } from './server.js';
 import type { AutomationTask, TradeSignal } from './types.js';
+import { systemStats } from './stats.js';
+import { systemEvents, type ChannelMessageRecord } from './events.js';
 
 /**
  * Validates session string before initializing GramJS
@@ -34,44 +36,71 @@ if (!config.sessionString || config.sessionString === 'YOUR_GENERATED_SESSION_ST
 /**
  * Initializes the GramJS Telegram UserBot Client
  */
-const session = new StringSession(config.sessionString);
-const client = new TelegramClient(session, config.apiId, config.apiHash, {
-  connectionRetries: 5,
+export const session = new StringSession(config.sessionString);
+export const client = new TelegramClient(session, config.apiId, config.apiHash, {
+  connectionRetries: 10,
   useWSS: false,
+  autoReconnect: true,
 });
 
+let resolvedTargetEntity: any = null;
+let isPullingActive = false;
+
+const processedMessageIds = new Set<number>();
+const lastSeenTextByMsgId = new Map<number, string>();
+
 /**
- * Extracts the numerical peer channel/chat ID as a BigInt from GramJS peer or message.
+ * Extracts a normalized numerical string from any Telegram peer, ID, or message object.
  */
-function extractPeerChannelId(target: unknown): bigint | null {
-  if (!target || typeof target !== 'object') return null;
-  const t = target as { channelId?: { toString: () => string }; peerId?: unknown; chatId?: { toString: () => string } };
-
-  if (target instanceof Api.PeerChannel && target.channelId !== undefined) {
-    return BigInt(target.channelId.toString());
+function extractPeerChannelIdString(peer: unknown): string | null {
+  if (!peer) return null;
+  if (typeof peer === 'string' || typeof peer === 'number' || typeof peer === 'bigint') {
+    return peer.toString().replace(/^-100/, '').replace(/^-/, '');
   }
-
-  if (target instanceof Api.PeerChat && target.chatId !== undefined) {
-    const cleaned = target.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
-    return BigInt(cleaned);
+  if (typeof peer === 'object') {
+    const p = peer as Record<string, unknown>;
+    if (p.channelId !== undefined && p.channelId !== null) {
+      return p.channelId.toString().replace(/^-100/, '').replace(/^-/, '');
+    }
+    if (p.chatId !== undefined && p.chatId !== null) {
+      return p.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
+    }
+    if (p.userId !== undefined && p.userId !== null) {
+      return p.userId.toString().replace(/^-100/, '').replace(/^-/, '');
+    }
+    if (p.peerId) {
+      return extractPeerChannelIdString(p.peerId);
+    }
+    if (p.toId) {
+      return extractPeerChannelIdString(p.toId);
+    }
+    if (p.id !== undefined && p.id !== null) {
+      return p.id.toString().replace(/^-100/, '').replace(/^-/, '');
+    }
   }
-
-  if (t.channelId !== undefined) {
-    return BigInt(t.channelId.toString());
-  }
-
-  if (t.peerId) {
-    return extractPeerChannelId(t.peerId);
-  }
-
-  if (t.chatId !== undefined) {
-    const cleaned = t.chatId.toString().replace(/^-100/, '').replace(/^-/, '');
-    try {
-      return BigInt(cleaned);
-    } catch {}
-  }
-
   return null;
+}
+
+/**
+ * Bulletproof check if an incoming message or update belongs to the configured VIP channel.
+ */
+function isFromTargetChannel(target: unknown): boolean {
+  if (!target) return false;
+
+  const targetStr = config.vipChannelIdBigInt.toString();
+  const rawCleaned = config.vipChannelIdRaw.replace(/^-100/, '').replace(/^-/, '');
+
+  if (resolvedTargetEntity && (resolvedTargetEntity as any).id) {
+    const entityId = (resolvedTargetEntity as any).id.toString().replace(/^-100/, '').replace(/^-/, '');
+    const extracted = extractPeerChannelIdString(target);
+    if (extracted === entityId || extracted === targetStr || extracted === rawCleaned) {
+      return true;
+    }
+  }
+
+  const extracted = extractPeerChannelIdString(target);
+  if (!extracted) return false;
+  return extracted === targetStr || extracted === rawCleaned;
 }
 
 /**
@@ -100,7 +129,6 @@ function printIncomingMessage(msgDetails: {
   text: string;
   parsedSignal: TradeSignal | null;
 }): void {
-  // Print raw message as a single line
   const cleanText = msgDetails.text.replace(/\n/g, ' ↵ ');
   logger.telegram(`Message #${msgDetails.messageId} from [${msgDetails.senderName}]: ${cleanText}`);
 
@@ -131,120 +159,56 @@ function printIncomingMessage(msgDetails: {
 }
 
 /**
- * Attempts to inspect and fetch details of the configured VIP channel.
- */
-async function inspectTargetChannel(): Promise<void> {
-  logger.telegram(`Fetching details for VIP Channel [ID: ${config.vipChannelIdRaw}]...`);
-
-  try {
-    const dialogs = await client.getDialogs({ limit: 200 });
-    const targetDialog = dialogs.find((d) => {
-      const entity = d.entity as { id?: { toString: () => string }; title?: string; username?: string; broadcast?: boolean; megagroup?: boolean; participantsCount?: number };
-      if (entity?.id && BigInt(entity.id.toString()) === config.vipChannelIdBigInt) {
-        return true;
-      }
-      const peerId = extractPeerChannelId(d.message?.peerId || (d.dialog as any)?.peer);
-      return peerId !== null && peerId === config.vipChannelIdBigInt;
-    });
-
-    if (targetDialog && targetDialog.entity) {
-      const entity = targetDialog.entity as { title?: string; username?: string; broadcast?: boolean; megagroup?: boolean; participantsCount?: number };
-      printChannelDetails({
-        title: entity.title || targetDialog.title || 'Untitled Channel',
-        id: config.vipChannelIdRaw,
-        bigIntId: config.vipChannelIdBigInt.toString(),
-        username: entity.username,
-        type: entity.broadcast ? 'Broadcast Channel (VIP)' : entity.megagroup ? 'Supergroup' : 'Chat',
-        participantsCount: entity.participantsCount,
-      });
-      return;
-    }
-
-    // Direct entity lookup fallback
-    try {
-      const channelPeer = new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
-      const entity = (await client.getEntity(channelPeer)) as { title?: string; username?: string; broadcast?: boolean; participantsCount?: number };
-      if (entity) {
-        printChannelDetails({
-          title: entity.title || 'VIP Channel',
-          id: config.vipChannelIdRaw,
-          bigIntId: config.vipChannelIdBigInt.toString(),
-          username: entity.username,
-          type: entity.broadcast ? 'Broadcast Channel' : 'Group / Channel',
-          participantsCount: entity.participantsCount,
-        });
-        return;
-      }
-    } catch {
-      // Entity not in local MTProto cache yet
-    }
-
-    // Default display if entity cannot be resolved yet
-    printChannelDetails({
-      title: 'Target Channel (Active)',
-      id: config.vipChannelIdRaw,
-      bigIntId: config.vipChannelIdBigInt.toString(),
-      type: 'Private Channel / Supergroup',
-    });
-  } catch (err) {
-    logger.warn('Could not retrieve full channel metadata from Telegram cache', err);
-    printChannelDetails({
-      title: 'Configured VIP Channel',
-      id: config.vipChannelIdRaw,
-      bigIntId: config.vipChannelIdBigInt.toString(),
-      type: 'Private Channel',
-    });
-  }
-}
-
-
-const processedMessageIdSet = new Set<string>();
-const lastProcessedMessageIds = new Map<string, number>();
-
-/**
  * Common logic to parse and execute a message from the VIP channel
  */
 function processMessage(message: any): void {
-  if (!message) return;
-  
-  const currentChannelStr = config.vipChannelIdBigInt.toString();
-  
-  if (message.id !== undefined) {
-    const messageKey = `${currentChannelStr}_${message.id}`;
-    if (processedMessageIdSet.has(messageKey)) {
-      return; // Strictly drop duplicates from event + polling races
-    }
-    
-    const highestSeen = lastProcessedMessageIds.get(currentChannelStr) || 0;
-    if (highestSeen > 0 && message.id < highestSeen - 50) {
-      return; // Message is suspiciously old, drop it to prevent historical zombies
+  if (!message || message.className === 'MessageService' || message.action) return;
+
+  const rawText = message.message || message.text || '';
+  if (!rawText.trim()) return;
+
+  const msgId = message.id;
+  if (msgId !== undefined) {
+    const prevText = lastSeenTextByMsgId.get(msgId);
+    if (processedMessageIds.has(msgId) && prevText === rawText) {
+      return; // Exact duplicate already processed
     }
 
-    processedMessageIdSet.add(messageKey);
-    // Amortized eviction: batch-remove oldest entries when set grows too large
-    if (processedMessageIdSet.size > 2000) {
-      const iter = processedMessageIdSet.values();
+    processedMessageIds.add(msgId);
+    lastSeenTextByMsgId.set(msgId, rawText);
+
+    // Amortized eviction when sets grow large
+    if (processedMessageIds.size > 3000) {
+      const iter = processedMessageIds.values();
       for (let i = 0; i < 500; i++) {
         const entry = iter.next();
         if (entry.done) break;
-        processedMessageIdSet.delete(entry.value);
+        processedMessageIds.delete(entry.value);
+        lastSeenTextByMsgId.delete(entry.value);
       }
-    }
-    
-    if (message.id > highestSeen) {
-      lastProcessedMessageIds.set(currentChannelStr, message.id);
     }
   }
 
-  const rawText = message.message || '';
   const senderName = message.postAuthor || (message.sender ? (message.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
 
   // Parse and validate signal deterministically
   const signal = parseSignal(rawText);
 
+  // Record into the live channel message feed
+  systemEvents.recordChannelMessage({
+    id: 'msg-' + (message.id || randomUUID()),
+    messageId: message.id || 0,
+    channelId: config.vipChannelIdRaw,
+    date: new Date(message.date ? message.date * 1000 : Date.now()).toISOString(),
+    senderName,
+    text: rawText,
+    isSignal: !!signal,
+    signal: signal || undefined,
+  });
+
   // Display rich message and signal details in terminal
   printIncomingMessage({
-    messageId: message.id,
+    messageId: message.id || 0,
     date: new Date(message.date ? message.date * 1000 : Date.now()),
     senderName,
     text: rawText,
@@ -252,7 +216,6 @@ function processMessage(message: any): void {
   });
 
   if (!signal) {
-    // Parser logs unrecognized format and returns null
     return;
   }
 
@@ -262,10 +225,30 @@ function processMessage(message: any): void {
     receivedAt: new Date(),
   };
 
+  // Broadcast signal event to Web Dashboard in real-time
+  systemEvents.emit('signal:received', {
+    taskId: task.id,
+    signal,
+    senderName,
+    messageId: message.id,
+    timestamp: new Date().toISOString(),
+  });
+
   // Enqueue task for sequential Playwright automation
   automationQueue
     .enqueue(task, executeAutomation)
     .then(async (result) => {
+      systemEvents.recordExecution({
+        id: task.id,
+        timestamp: new Date().toISOString(),
+        signal: task.signal,
+        durationMs: result.durationMs,
+        success: result.success,
+        error: result.error,
+        screenshotPath: result.screenshotPath,
+        balance: result.balance,
+      });
+
       if (result.success) {
         logger.info(
           `Task [${task.id}] succeeded for [${result.signal.action} ${result.signal.ticker}] in ${result.durationMs}ms`
@@ -275,7 +258,7 @@ function processMessage(message: any): void {
           `Task [${task.id}] failed for [${result.signal.action} ${result.signal.ticker}]: ${result.error}`
         );
 
-        // Feedback Loop: Forward failure screenshot & alert to Saved Messages ('me')
+        // Forward failure screenshot & alert to Saved Messages ('me')
         try {
           const alertMessage =
             `🚨 [AUTOMATION TASK FAILED]\n` +
@@ -311,90 +294,317 @@ function processMessage(message: any): void {
 /**
  * Handles incoming NewMessage and EditedMessage events from Telegram MTProto.
  */
-async function handleNewMessage(event: NewMessageEvent): Promise<void> {
+function handleNewMessage(event: NewMessageEvent): void {
+  systemStats.lastMessageAt = Date.now();
   const message = event.message;
   if (!message) return;
 
-  const incomingPeerId = extractPeerChannelId(message.peerId || message);
-
-  // STRICT FILTER: Drop immediately if channel ID does not match target VIP_CHANNEL_ID
-  if (incomingPeerId === null || incomingPeerId !== config.vipChannelIdBigInt) {
+  if (!isFromTargetChannel(message.peerId || message)) {
+    systemStats.messagesIgnored++;
+    systemEvents.emit('telemetry:update', systemStats);
     return;
   }
 
+  systemStats.messagesProcessed++;
+  systemEvents.emit('telemetry:update', systemStats);
   processMessage(message);
 }
 
 /**
- * Actively polls the VIP channel every 3000ms to bypass Telegram push update limitations for large channels.
+ * Handles raw MTProto update events (UpdateNewChannelMessage, UpdateEditChannelMessage, etc.)
  */
-function startActivePolling(): void {
-  logger.info(`Starting ACTIVE polling (300ms) for VIP Channel [${config.vipChannelIdRaw}]...`);
-  
-  let isPolling = false;
-  let isFirstPoll = true;
-  let lastPolledChannelStr = config.vipChannelIdBigInt.toString();
+function handleRawUpdate(update: any): void {
+  if (!update) return;
 
-  async function poll() {
-    if (isShuttingDown || !client.connected) return;
-    if (isPolling) return; // Prevent overlapping polls if network is slow
-    
-    isPolling = true;
-    let nextDelay = 300;
-
-    try {
-      const currentChannelStr = config.vipChannelIdBigInt.toString();
-      if (currentChannelStr !== lastPolledChannelStr) {
-        logger.info(`Channel switch detected (${lastPolledChannelStr} -> ${currentChannelStr}). Resetting poll state to ignore history.`);
-        isFirstPoll = true;
-        lastPolledChannelStr = currentChannelStr;
-      }
-
-      const messages = await client.getMessages(config.vipChannelIdRaw, { limit: 15 });
-      if (messages && messages.length > 0) {
-        
-        if (isFirstPoll) {
-          isFirstPoll = false;
-          if (messages[0]?.id !== undefined) {
-            lastProcessedMessageIds.set(currentChannelStr, messages[0].id);
-          }
-          // Mark history as processed so we don't execute past signals
-          for (const msg of messages) {
-            if (msg.id !== undefined) {
-              processedMessageIdSet.add(`${currentChannelStr}_${msg.id}`);
-            }
-          }
-        } else {
-          // Loop backwards: oldest first to newest, to preserve chronological signal processing
-          for (let i = messages.length - 1; i >= 0; i--) {
-            processMessage(messages[i]);
-          }
-        }
-      }
-    } catch (err: unknown) {
-      const e = err as { errorMessage?: string; message?: string; seconds?: number };
-      if (e?.errorMessage === 'FLOOD_WAIT' || e?.message?.includes('FLOOD')) {
-        const waitTime = e.seconds || 5;
-        logger.warn(`⚠️ Telegram rate limit (FloodWait) hit during polling. Backing off for ${waitTime} seconds...`);
-        nextDelay = waitTime * 1000;
-      }
-      // Ignore minor network errors
-    } finally {
-      isPolling = false;
-      setTimeout(poll, nextDelay);
-    }
+  let msg = update.message;
+  if (!msg && update.messages && Array.isArray(update.messages)) {
+    msg = update.messages[0];
   }
 
-  // Kick off the recursive poll
-  pollTimerRef = setTimeout(poll, 0);
+  if (msg && msg.message) {
+    if (isFromTargetChannel(msg.peerId || msg)) {
+      systemStats.lastMessageAt = Date.now();
+      systemStats.messagesProcessed++;
+      systemEvents.emit('telemetry:update', systemStats);
+      processMessage(msg);
+    }
+  }
 }
 
-let pollTimerRef: NodeJS.Timeout | undefined;
+/**
+ * Discovers and binds the target VIP channel entity from MTProto dialogs cache.
+ */
+async function resolveTargetChannel(): Promise<void> {
+  logger.telegram(`Resolving entity and permissions for VIP Channel [ID: ${config.vipChannelIdRaw}]...`);
+
+  try {
+    // 1. Fetch user dialogs to load all entity access_hashes into GramJS session cache
+    const dialogs = await client.getDialogs({ limit: 150 });
+    
+    // 2. Find matching dialog entity
+    const targetDialog = dialogs.find((d) => {
+      const entity = d.entity as any;
+      if (!entity) return false;
+      return isFromTargetChannel(entity) || isFromTargetChannel(d.message?.peerId || (d.dialog as any)?.peer);
+    });
+
+    if (targetDialog && targetDialog.entity) {
+      resolvedTargetEntity = targetDialog.entity;
+      const entity = targetDialog.entity as any;
+      const title = entity.title || targetDialog.title || 'VIP Channel';
+      const type = entity.broadcast ? 'Broadcast Channel (VIP)' : entity.megagroup ? 'Supergroup' : 'Chat';
+      
+      systemStats.channelTitle = title;
+      systemStats.channelType = type;
+      systemStats.channelMembers = entity.participantsCount;
+
+      printChannelDetails({
+        title,
+        id: config.vipChannelIdRaw,
+        bigIntId: config.vipChannelIdBigInt.toString(),
+        username: entity.username,
+        type,
+        participantsCount: entity.participantsCount,
+      });
+
+      systemEvents.recordConnectionLog({
+        id: 'res-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        type: 'RESOLVE',
+        message: `Bound Target VIP Channel: ${title} (${config.vipChannelIdRaw})`,
+        details: `${type} • ${entity.participantsCount?.toLocaleString() || 'N/A'} members`,
+      });
+    } else {
+      // Direct entity lookup fallback
+      try {
+        const channelPeer = new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
+        const entity = await client.getEntity(channelPeer);
+        if (entity) {
+          resolvedTargetEntity = entity;
+          const title = (entity as any).title || 'VIP Channel';
+          const type = (entity as any).broadcast ? 'Broadcast Channel' : 'Group / Channel';
+
+          systemStats.channelTitle = title;
+          systemStats.channelType = type;
+          systemStats.channelMembers = (entity as any).participantsCount;
+
+          printChannelDetails({
+            title,
+            id: config.vipChannelIdRaw,
+            bigIntId: config.vipChannelIdBigInt.toString(),
+            username: (entity as any).username,
+            type,
+            participantsCount: (entity as any).participantsCount,
+          });
+
+          systemEvents.recordConnectionLog({
+            id: 'res-' + Date.now(),
+            timestamp: new Date().toISOString(),
+            type: 'RESOLVE',
+            message: `Bound Target VIP Channel via direct entity: ${title}`,
+          });
+        }
+      } catch {
+        logger.warn(`Could not resolve direct PeerChannel for ${config.vipChannelIdRaw}. Checking by raw ID.`);
+        resolvedTargetEntity = null;
+        printChannelDetails({
+          title: 'Target Channel (Raw Filter)',
+          id: config.vipChannelIdRaw,
+          bigIntId: config.vipChannelIdBigInt.toString(),
+          type: 'Private Channel / Supergroup',
+        });
+      }
+    }
+
+    // 3. Prime message cache with recent channel messages so old history is not retroactively executed
+    if (resolvedTargetEntity) {
+      try {
+        const recentMessages = await client.getMessages(resolvedTargetEntity, { limit: 25 });
+        const nowSec = Math.floor(Date.now() / 1000);
+        for (const msg of recentMessages) {
+          if (msg && msg.id) {
+            const ageSec = nowSec - (msg.date || 0);
+            // Mark messages older than 60s as already processed
+            if (ageSec > 60) {
+              processedMessageIds.add(msg.id);
+              if (msg.message) lastSeenTextByMsgId.set(msg.id, msg.message);
+            }
+
+            // Populate the recent channel messages feed
+            if (msg.message) {
+              const rawText = msg.message;
+              const senderName = msg.postAuthor || (msg.sender ? (msg.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
+              const signal = parseSignal(rawText);
+              systemEvents.recordChannelMessage({
+                id: 'msg-' + msg.id,
+                messageId: msg.id,
+                channelId: config.vipChannelIdRaw,
+                date: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
+                senderName,
+                text: rawText,
+                isSignal: !!signal,
+                signal: signal || undefined,
+              });
+            }
+          }
+        }
+        logger.telegram(`Primed message history cache (${recentMessages.length} messages loaded).`);
+      } catch (historyErr) {
+        logger.debug('Could not pre-fetch recent messages from entity', historyErr);
+      }
+    }
+  } catch (err) {
+    logger.warn('Error while inspecting target channel dialogs', err);
+  }
+}
+
+/**
+ * High-Frequency Active Channel Puller / Sync Loop (Layer 2 Puller)
+ * Actively pulls latest messages from target channel every 1.5 seconds.
+ */
+async function pullLatestChannelMessages(): Promise<void> {
+  if (isPullingActive || !client.connected) return;
+  isPullingActive = true;
+
+  try {
+    const target = resolvedTargetEntity || new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
+    const messages = await client.getMessages(target, { limit: 5 });
+
+    systemStats.lastCheckedAt = Date.now();
+    systemEvents.emit('telemetry:update', systemStats);
+
+    if (Array.isArray(messages) && messages.length > 0) {
+      for (const msg of [...messages].reverse()) {
+        if (!msg || !msg.id || !msg.message) continue;
+        if (!isFromTargetChannel(msg.peerId || msg)) continue;
+
+        const isNew = !processedMessageIds.has(msg.id);
+        const prevText = lastSeenTextByMsgId.get(msg.id);
+        const isEdited = prevText !== undefined && prevText !== msg.message;
+
+        if (isNew || isEdited) {
+          systemStats.lastMessageAt = Date.now();
+          systemStats.messagesProcessed++;
+          systemEvents.emit('telemetry:update', systemStats);
+          processMessage(msg);
+        }
+      }
+    }
+  } catch {
+    // Non-blocking catch for transient network ticks
+  } finally {
+    isPullingActive = false;
+  }
+}
+
+/**
+ * On-demand helper to fetch the latest channel messages
+ */
+export async function forceFetchChannelMessages(limit = 30): Promise<ChannelMessageRecord[]> {
+  if (!client.connected) {
+    throw new Error('Telegram Client is not connected');
+  }
+  const target = resolvedTargetEntity || new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
+  const messages = await client.getMessages(target, { limit });
+  const records: ChannelMessageRecord[] = [];
+
+  for (const msg of messages) {
+    if (!msg || !msg.message) continue;
+    const senderName = msg.postAuthor || (msg.sender ? (msg.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
+    const rawText = msg.message || '';
+    const signal = parseSignal(rawText);
+    const rec: ChannelMessageRecord = {
+      id: 'msg-' + msg.id,
+      messageId: msg.id,
+      channelId: config.vipChannelIdRaw,
+      date: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
+      senderName,
+      text: rawText,
+      isSignal: !!signal,
+      signal: signal || undefined,
+    };
+    records.push(rec);
+    systemEvents.recordChannelMessage(rec);
+  }
+  return records;
+}
+
+/**
+ * Manual ping trigger to test active MTProto socket latency
+ */
+export async function pingTelegramConnection(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  try {
+    if (!client.connected) {
+      throw new Error('Client socket not connected');
+    }
+    await client.getMe();
+    const latencyMs = Date.now() - start;
+    systemStats.lastPingAt = Date.now();
+    systemEvents.recordConnectionLog({
+      id: 'ping-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'PING',
+      message: `Manual socket ping OK`,
+      latencyMs,
+    });
+    systemEvents.emit('telemetry:update', systemStats);
+    return { success: true, latencyMs };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    systemEvents.recordConnectionLog({
+      id: 'ping-err-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'ERROR',
+      message: `Manual ping failed: ${errorMsg}`,
+    });
+    return { success: false, latencyMs: Date.now() - start, error: errorMsg };
+  }
+}
+
+/**
+ * Force reconnect Telegram client
+ */
+export async function reconnectTelegramClient(): Promise<boolean> {
+  try {
+    systemEvents.recordConnectionLog({
+      id: 'recon-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'RECONNECT',
+      message: 'Forcing Telegram MTProto disconnect and reconnect...',
+    });
+    await client.disconnect();
+    await client.connect();
+    await resolveTargetChannel();
+    systemStats.status = 'Connected';
+    systemEvents.recordConnectionLog({
+      id: 'recon-ok-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'CONNECT',
+      message: 'Telegram MTProto reconnected successfully and target channel rebound.',
+    });
+    systemEvents.emit('telemetry:update', systemStats);
+    return true;
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    systemStats.status = 'Error';
+    systemEvents.recordConnectionLog({
+      id: 'recon-fail-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'ERROR',
+      message: `Reconnect failed: ${errorMsg}`,
+    });
+    systemEvents.emit('telemetry:update', systemStats);
+    return false;
+  }
+}
 
 /**
  * Graceful Teardown Lifecycle Handler
  */
 let isShuttingDown = false;
+let keepAliveIntervalRef: NodeJS.Timeout | undefined;
+let pullIntervalRef: NodeJS.Timeout | undefined;
 
 async function gracefulShutdown(signal: string): Promise<void> {
   if (isShuttingDown) return;
@@ -402,16 +612,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   logger.info(`Received ${signal}. Initiating graceful shutdown...`);
 
-  // 0. Stop polling timer
-  if (pollTimerRef) clearTimeout(pollTimerRef);
-
   // 1. Pause incoming tasks and wait for active task to drain
   automationQueue.pause();
   logger.info('Waiting for pending tasks in queue to finish...');
   await automationQueue.onIdle();
 
-  // 2. Stop keepAlive interval
+  // 2. Clear timers
   if (keepAliveIntervalRef) clearInterval(keepAliveIntervalRef);
+  if (pullIntervalRef) clearInterval(pullIntervalRef);
 
   // 3. Clean up any active warm browser session
   await closeWarmBrowser();
@@ -420,6 +628,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
   try {
     logger.info('Disconnecting GramJS Telegram client...');
     await client.disconnect();
+    systemEvents.recordConnectionLog({
+      id: 'disc-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'DISCONNECT',
+      message: 'Telegram Client disconnected cleanly during graceful shutdown.',
+    });
     logger.info('Telegram client disconnected.');
   } catch (err) {
     logger.error('Error while disconnecting Telegram client', err);
@@ -428,8 +642,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
   logger.info('Graceful shutdown completed successfully. Exiting.');
   process.exit(0);
 }
-
-let keepAliveIntervalRef: NodeJS.Timeout | undefined;
 
 // Register OS termination signal handlers
 process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
@@ -455,59 +667,115 @@ async function bootstrap(): Promise<void> {
   
   try {
     logger.info('Connecting to Telegram MTProto...');
+    systemStats.status = 'Connecting...';
+    systemEvents.recordConnectionLog({
+      id: 'conn-start-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'CONNECT',
+      message: 'Connecting to Telegram MTProto Gateway...',
+    });
+
     await client.connect();
+    systemStats.status = 'Connected';
 
     const me = await client.getMe();
     if (me && 'username' in me) {
+      systemStats.accountUsername = me.username ? `@${me.username}` : undefined;
+      systemStats.accountId = me.id?.toString();
       logger.info(`Authenticated successfully as @${me.username || me.id}`);
+      systemEvents.recordConnectionLog({
+        id: 'auth-ok-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        type: 'CONNECT',
+        message: `Authenticated successfully as @${me.username || me.id}`,
+        details: `Account ID: ${me.id}`,
+      });
     } else {
       logger.info('Authenticated successfully with Telegram UserBot session.');
     }
 
-    // Inspect and display target VIP channel details in terminal
-    await inspectTargetChannel();
+    // Inspect and display target VIP channel details
+    await resolveTargetChannel();
 
-
-    // Register the core new message handler
-    // GramJS NewMessage handles both new channel messages and edited posts
+    // Attach real-time event listeners
     client.addEventHandler(handleNewMessage, new NewMessage({}));
-    logger.info(`Telegram NewMessage listener attached for VIP Channel [${config.vipChannelIdRaw}]. Listening for signals...`);
+    client.addEventHandler(handleRawUpdate, new Raw({}));
+    logger.info(`Telegram Listeners attached for VIP Channel [${config.vipChannelIdRaw}]. Listening for signals...`);
 
-    // Start the active polling fallback
-    startActivePolling();
+    // Listen for live channel switches from dashboard
+    systemEvents.on('channel:switch', async () => {
+      logger.telegram(`Channel switch detected from Dashboard. Re-resolving VIP Channel [${config.vipChannelIdRaw}]...`);
+      await resolveTargetChannel();
+    });
+
+    // Layer 2 Active Channel Puller Interval (polls every 1500ms)
+    pullIntervalRef = setInterval(() => {
+      void pullLatestChannelMessages();
+    }, 1500);
 
     // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
     keepAliveIntervalRef = setInterval(async () => {
       if (isShuttingDown) return;
       
       let isActuallyConnected = false;
+      const startPing = Date.now();
       try {
         if (client.connected) {
-          // Force network traffic to keep NAT state alive and detect silent ISP drops
           await Promise.race([
             client.getMe(),
             new Promise((_, reject) => setTimeout(() => reject(new Error('PING_TIMEOUT')), 5000))
           ]);
           isActuallyConnected = true;
+          systemStats.lastPingAt = Date.now();
+          systemEvents.emit('telemetry:update', systemStats);
+          systemEvents.recordConnectionLog({
+            id: 'ping-' + Date.now(),
+            timestamp: new Date().toISOString(),
+            type: 'PING',
+            message: 'Periodic keepalive ping OK',
+            latencyMs: Date.now() - startPing,
+          });
         }
       } catch (err) {
-        logger.warn(`⚠️ Telegram active ping failed (Zombie Connection Detected): ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`⚠️ Telegram active ping failed: ${err instanceof Error ? err.message : String(err)}`);
+        systemEvents.recordConnectionLog({
+          id: 'ping-err-' + Date.now(),
+          timestamp: new Date().toISOString(),
+          type: 'ERROR',
+          message: `Active ping failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
 
       if (!isActuallyConnected) {
         logger.warn('⚠️ Telegram client disconnected or unresponsive! Forcing reconnect...');
         try {
-          // Force disconnect to clear zombie socket, then reconnect
           await client.disconnect();
           await client.connect();
+          await resolveTargetChannel();
           logger.info('✅ Active ping reconnect successful.');
+          systemStats.status = 'Connected';
+          systemEvents.emit('telemetry:update', systemStats);
+          systemEvents.recordConnectionLog({
+            id: 'recon-auto-' + Date.now(),
+            timestamp: new Date().toISOString(),
+            type: 'CONNECT',
+            message: 'Auto-reconnect after ping failure successful.',
+          });
         } catch (e) {
           logger.error('❌ Active ping reconnect failed.', e);
+          systemStats.status = 'Error';
+          systemEvents.emit('telemetry:update', systemStats);
+          systemEvents.recordConnectionLog({
+            id: 'recon-auto-err-' + Date.now(),
+            timestamp: new Date().toISOString(),
+            type: 'ERROR',
+            message: `Auto-reconnect failed: ${e instanceof Error ? e.message : String(e)}`,
+          });
         }
       }
-    }, 45000); // Send active ping every 45 seconds
+    }, 45000);
 
-    // Proactive Pre-warming: Pre-open and keep browser on standby so it is 100% ready
+    // Pre-warm Chrome profile on startup
     if (config.autoLaunchChrome) {
       logger.browser('🚀 Initializing Cortex Chrome profile on startup (Always Ready Standby)...');
       executeAutomation({

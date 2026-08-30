@@ -35,7 +35,7 @@ function log(level: LogLevel, message: string, meta?: unknown): void {
   // Simple HH:MM:SS timestamp (better for devs than full date)
   const d = new Date();
   const pad = (n: number) => n.toString().padStart(2, '0');
-  const timestamp = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const timestamp = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${d.getMilliseconds().toString().padStart(3, '0')}`;
   
   const color = colors[level] || colors.reset;
   const prefix = `${colors.dim}[${timestamp}]${colors.reset} ${color}${level.padEnd(8)}${colors.reset}`;

@@ -27,7 +27,7 @@ async function listChannels(): Promise<void> {
     await client.connect();
 
     console.log('Fetching joined channels and groups...\n');
-    const dialogs = await client.getDialogs({ limit: 100 });
+    const dialogs = await client.getDialogs({ limit: 200 });
 
     const channelRows: Array<{
       type: string;

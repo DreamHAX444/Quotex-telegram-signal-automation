@@ -362,6 +362,9 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
         // CRITICAL: Inject stealth script to hide Playwright from Cloudflare
         await globalContext.addInitScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
         
+        // CRITICAL: Polyfill for tsx/esbuild __name wrapper in Playwright evaluate closures
+        await globalContext.addInitScript("window.__name = (target, value) => Object.defineProperty(target, 'name', { value, configurable: true }); window.__defProp = Object.defineProperty;");
+        
         globalContext.setDefaultTimeout(config.browserTimeoutMs);
         
         globalContext.on('close', () => {
@@ -382,7 +385,17 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
             }
           }
           
-          const startupPage = globalContext.pages()[0] || await globalContext.newPage();
+          // CRITICAL: Close all restored tabs except one to prevent Quotex multi-tab conflicts 
+          // and ensure our target tab is the only one active.
+          const allPages = globalContext!.pages();
+          for (let i = 1; i < allPages.length; i++) {
+            const pageToClose = allPages[i];
+            if (pageToClose) {
+              await pageToClose.close().catch(() => {});
+            }
+          }
+          
+          const startupPage = globalContext!.pages()[0] || await globalContext!.newPage();
           let targetUrl = config.targetUrl;
           try {
             const baseUrl = new URL(config.targetUrl).origin;
@@ -688,8 +701,7 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
 
   for (const searchQuery of queries) {
     await searchInput.click();
-    await searchInput.fill('');
-    await searchInput.pressSequentially(searchQuery, { delay: 20 });
+    await searchInput.fill(searchQuery);
     
     // Dispatch input & change events for reactive frameworks
     await searchInput.evaluate((el: HTMLInputElement) => {
@@ -698,15 +710,18 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
       el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
     });
     
-    logger.browser(`🔍 Typed "${searchQuery}" into picker search box`);
-    await page.waitForTimeout(50);
+    logger.browser(`🔍 Searched "${searchQuery}" in picker`);
+    
+    let clicked = false;
+    for (let attempts = 0; attempts < 15; attempts++) {
+      await page.waitForTimeout(20);
 
-    const clicked = await page.evaluate(
-      ({ targetCanon }) => {
-        // 1. Primary: Exact Quotex Asset Row & Name Selectors (.R2Rgm, .vPvlJ, span.Z2fyK, .teoXG, .e4qZ6)
-        const primaryRows = document.querySelectorAll(
-          '.yejPg .R2Rgm, .yejPg .vPvlJ, .R2Rgm, .vPvlJ, .teoXG, .e4qZ6, span.Z2fyK'
-        );
+      clicked = await page.evaluate(
+        ({ targetCanon }) => {
+          // 1. Primary: Exact Quotex Asset Row & Name Selectors (.R2Rgm, .vPvlJ, span.Z2fyK, .teoXG, .e4qZ6)
+          const primaryRows = document.querySelectorAll(
+            '.yejPg .R2Rgm, .yejPg .vPvlJ, .R2Rgm, .vPvlJ, .teoXG, .e4qZ6, span.Z2fyK'
+          );
 
         for (const el of primaryRows) {
           const nameSpan = el.querySelector('span.Z2fyK, .teoXG span, .e4qZ6 span') || el;
@@ -768,6 +783,9 @@ async function searchAndSelectMarket(page: Page, targetTicker: string): Promise<
       { targetCanon }
     );
 
+      if (clicked) break;
+    } // end polling loop
+
     if (clicked) {
       logger.browser(`✅ Clicked search result for "${searchQuery}" directly via DOM`);
       return true;
@@ -800,7 +818,7 @@ async function verifyMarketSwitched(page: Page, targetTicker: string, maxWaitMs:
       setActiveMarket(currentMarket);
       return true;
     }
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(10);
   }
 
   const finalCheck = await readActiveMarketFromDOM(page);
@@ -968,7 +986,22 @@ export async function clickTradeButton(
 
   // ─── INSTANT CLICK: runs inside the browser, no round-trips ───
   const result = await page.evaluate((targetWord: string) => {
-    // Step 1: Find ALL <span class="oQ4Z4"> elements
+    // Step 0: Direct CSS matching for Quotex specific trade buttons (Fastest & Most Reliable)
+    if (targetWord === 'Up') {
+      const callBtn = document.querySelector('.btn-call, .button--success, [data-action="call"], .call-btn') as HTMLElement;
+      if (callBtn) {
+        callBtn.click();
+        return { ok: true, method: 'Direct CSS (.btn-call)', classes: callBtn.className };
+      }
+    } else if (targetWord === 'Down') {
+      const putBtn = document.querySelector('.btn-put, .button--danger, [data-action="put"], .put-btn') as HTMLElement;
+      if (putBtn) {
+        putBtn.click();
+        return { ok: true, method: 'Direct CSS (.btn-put)', classes: putBtn.className };
+      }
+    }
+
+    // Step 1: Find ALL <span class="oQ4Z4"> elements (Older Quotex UI)
     const spans = document.querySelectorAll('span.oQ4Z4');
 
     for (const span of spans) {
@@ -1031,6 +1064,15 @@ export async function clickTradeButton(
   logger.browser(`⚠️ JS click missed, trying Playwright locator...`);
   const debug = (result as { debug?: string }).debug || '';
   logger.debug(`DOM state: ${debug}`);
+
+  try {
+    const loc = page.locator('.btn-call, .btn-put').filter({ hasText: new RegExp(word, 'i') }).first();
+    if (await loc.isVisible({ timeout: 500 })) {
+      await loc.click({ force: true });
+      logger.browser(`✅ ${word.toUpperCase()} clicked via Playwright .btn-call/.btn-put locator`);
+      return { success: true, selectorUsed: 'playwright_btn_class' };
+    }
+  } catch {}
 
   try {
     const loc = page.locator(`span.oQ4Z4:text-is("${word}")`).first();

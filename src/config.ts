@@ -39,6 +39,17 @@ function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
   }
 }
 
+function readBoundedInteger(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < min || value > max) {
+    logger.warn(`${name} must be between ${min} and ${max}; using ${fallback}.`);
+    return fallback;
+  }
+  return value;
+}
+
 function validateAndLoadConfig(): AppConfig {
   const rawApiId = process.env.API_ID?.trim();
   const apiHash = process.env.API_HASH?.trim();
@@ -91,6 +102,9 @@ function validateAndLoadConfig(): AppConfig {
   const chromeProfileName = process.env.CHROME_PROFILE_NAME?.trim() || 'Profile 1';
 
   const autoLaunchChrome = process.env.AUTO_LAUNCH_CHROME !== 'false';
+  const telegramPollIntervalMs = readBoundedInteger('TELEGRAM_POLL_INTERVAL_MS', 2000, 1000, 60000);
+  const telegramKeepAliveIntervalMs = readBoundedInteger('TELEGRAM_KEEPALIVE_INTERVAL_MS', 30000, 10000, 300000);
+  const maxMessageAgeMs = readBoundedInteger('MAX_MESSAGE_AGE_MS', 30000, 5000, 300000);
 
   return {
     apiId,
@@ -106,6 +120,9 @@ function validateAndLoadConfig(): AppConfig {
     chromeUserDataDir,
     chromeProfileName,
     autoLaunchChrome,
+    telegramPollIntervalMs,
+    telegramKeepAliveIntervalMs,
+    maxMessageAgeMs,
   };
 }
 

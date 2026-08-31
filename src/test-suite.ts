@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { chromium } from 'playwright';
 import { parseSignal } from './parser.js';
 import { isUpAction, isDownAction } from './types.js';
-import { automationQueue } from './queue.js';
+import { AutomationQueue, automationQueue } from './queue.js';
 import {
   clickTradeButton,
   getActiveMarket,
@@ -373,6 +373,34 @@ async function runTestSuite(): Promise<void> {
   assert.deepStrictEqual(executionOrder, [1, 2, 3, 4, 5], 'Tasks must execute in strict FIFO sequence');
 
   console.log('✔ Test 2 Passed: Queue strictly serializes execution with concurrency = 1.\n');
+
+  // Clearing must never detach the active runner or allow a second runner to overlap.
+  const clearQueue = new AutomationQueue();
+  let clearTestActive = 0;
+  let clearTestMaxConcurrent = 0;
+  const clearRunner = async (signal: TradeSignal) => {
+    clearTestActive++;
+    clearTestMaxConcurrent = Math.max(clearTestMaxConcurrent, clearTestActive);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    clearTestActive--;
+    return { success: true, signal, durationMs: 40 };
+  };
+  const clearTasks: AutomationTask[] = [1, 2, 3].map((i) => ({
+    id: `clear-${i}`,
+    signal: { action: 'UP', ticker: `CLEAR${i}`, rawText: `UP CLEAR${i}`, timestamp: new Date() },
+    receivedAt: new Date(),
+  }));
+  const first = clearQueue.enqueue(clearTasks[0]!, clearRunner);
+  const second = clearQueue.enqueue(clearTasks[1]!, clearRunner);
+  const third = clearQueue.enqueue(clearTasks[2]!, clearRunner);
+  clearQueue.clear();
+  const clearResults = await Promise.all([first, second, third]);
+  assert.strictEqual(clearResults[0]?.success, true, 'Active task must finish during clear');
+  assert.strictEqual(clearResults[1]?.error, 'Cancelled', 'First waiting task must be cancelled');
+  assert.strictEqual(clearResults[2]?.error, 'Cancelled', 'Second waiting task must be cancelled');
+  assert.strictEqual(clearTestMaxConcurrent, 1, 'Clear must not break concurrency protection');
+  assert.deepStrictEqual(clearQueue.getStats(), { size: 0, pending: 0, isPaused: false });
+  console.log('✔ Queue clear safety passed: active work finishes and waiting work cancels without overlap.\n');
 
   // ----------------------------------------------------
   // TEST 3: Quotex UP & DOWN HTML Button Click Verification

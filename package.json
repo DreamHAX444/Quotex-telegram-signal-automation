@@ -5,11 +5,11 @@
   "type": "module",
   "main": "dist/bot.js",
   "scripts": {
-    "dev": "tsx --env-file=.env src/bot.ts",
+    "dev": "tsx src/bot.ts",
     "build": "tsc",
-    "start": "node --env-file=.env dist/bot.js",
-    "test": "tsx --env-file=.env src/test-suite.ts",
-    "generate-session": "tsx --env-file=.env src/generate.ts"
+    "start": "node dist/bot.js",
+    "test": "tsx src/test-suite.ts",
+    "generate-session": "tsx src/generate.ts"
   },
   "keywords": [
     "telegram",

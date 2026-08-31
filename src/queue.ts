@@ -2,115 +2,146 @@ import type { AutomationTask, ExecutionResult, TradeSignal } from './types.js';
 import { logger } from './logger.js';
 import { systemEvents } from './events.js';
 
-/**
- * Sequential Task Queue (Concurrency = 1)
- * Prevents launching multiple concurrent Chromium instances and guarantees
- * deterministic, serialized execution of trading/automation tasks.
- */
-class AutomationQueue {
-  private tail: Promise<unknown> = Promise.resolve();
-  private pendingCount: number = 0;
-  private isPausedState: boolean = false;
-  private clearEpoch: number = 0;
+interface QueueEntry {
+  task: AutomationTask;
+  runner: (signal: TradeSignal) => Promise<ExecutionResult>;
+  resolve: (result: ExecutionResult) => void;
+}
 
-  /**
-   * Enqueues an automation task to be processed sequentially.
-   */
-  public async enqueue(
+/**
+ * Strict FIFO automation queue with exactly one active runner.
+ * Waiting tasks can be cancelled safely without detaching the active task.
+ */
+export class AutomationQueue {
+  private readonly waiting: QueueEntry[] = [];
+  private active = false;
+  private isPausedState = false;
+  private idleWaiters: Array<() => void> = [];
+
+  public enqueue(
     task: AutomationTask,
     runner: (signal: TradeSignal) => Promise<ExecutionResult>
   ): Promise<ExecutionResult> {
     if (this.isPausedState) {
-      return { success: false, signal: task.signal, durationMs: 0, error: 'Queue is paused' };
+      return Promise.resolve({
+        success: false,
+        signal: task.signal,
+        durationMs: 0,
+        error: 'Queue is paused',
+      });
     }
 
-    this.pendingCount++;
-    logger.queue(`Enqueueing task [${task.id}] for [${task.signal.action} ${task.signal.ticker}]. Pending: ${this.pendingCount}`);
-    
-    systemEvents.emit('queue:update', this.getStats());
+    const resultPromise = new Promise<ExecutionResult>((resolve) => {
+      this.waiting.push({ task, runner, resolve });
+    });
+
+    logger.queue(
+      `Enqueued task [${task.id}] for [${task.signal.action} ${task.signal.ticker}]. Total: ${this.totalCount}`
+    );
     systemEvents.emit('task:queued', task);
+    this.emitStats();
+    void this.drain();
 
-    const epoch = this.clearEpoch;
-
-    const executionPromise = this.tail.then(async () => {
-      if (this.isPausedState || epoch !== this.clearEpoch) {
-        this.pendingCount--;
-        systemEvents.emit('queue:update', this.getStats());
-        return { success: false, signal: task.signal, durationMs: 0, error: 'Cancelled' };
-      }
-      
-      logger.queue(`Executing queued task [${task.id}]`);
-      systemEvents.emit('task:start', task);
-
-      try {
-        const result = await runner(task.signal);
-        return result;
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        logger.error(`Task [${task.id}] runner threw exception`, err);
-        return { success: false, signal: task.signal, durationMs: 0, error: errorMsg };
-      } finally {
-        this.pendingCount--;
-        systemEvents.emit('queue:update', this.getStats());
-        if (this.pendingCount === 0) {
-          logger.queue('Queue is idle. All tasks completed.');
-        }
-      }
-    });
-
-    // Advance the tail, catching errors so the chain doesn't break
-    this.tail = executionPromise.catch((err) => {
-      logger.error('Unhandled error inside queue worker', err);
-    });
-    
-    return executionPromise;
+    return resultPromise;
   }
 
-  /**
-   * Returns current queue metrics.
-   */
   public getStats(): { size: number; pending: number; isPaused: boolean } {
     return {
-      size: this.pendingCount,
-      pending: this.pendingCount > 0 ? 1 : 0,
+      size: this.totalCount,
+      pending: this.active ? 1 : 0,
       isPaused: this.isPausedState,
     };
   }
 
-  /**
-   * Pauses incoming execution in the queue.
-   */
   public pause(): void {
     this.isPausedState = true;
-    logger.queue('Task queue paused.');
-    systemEvents.emit('queue:update', this.getStats());
+    logger.queue('Task queue paused. Active task will finish; waiting tasks remain queued.');
+    this.emitStats();
   }
 
-  /**
-   * Resumes incoming execution in the queue.
-   */
   public resume(): void {
+    if (!this.isPausedState) return;
     this.isPausedState = false;
     logger.queue('Task queue resumed.');
-    systemEvents.emit('queue:update', this.getStats());
+    this.emitStats();
+    void this.drain();
   }
 
-  /**
-   * Clears pending tasks from the queue.
-   */
+  /** Cancels waiting tasks only. The active task is never detached or duplicated. */
   public clear(): void {
-    this.clearEpoch++;
-    this.pendingCount = 0;
-    this.tail = Promise.resolve();
-    logger.queue('Task queue cleared.');
+    const cancelled = this.waiting.splice(0);
+    for (const entry of cancelled) {
+      entry.resolve({
+        success: false,
+        signal: entry.task.signal,
+        durationMs: 0,
+        error: 'Cancelled',
+      });
+    }
+
+    logger.queue(`Task queue cleared. Cancelled ${cancelled.length} waiting task(s).`);
+    this.emitStats();
+    this.resolveIdleIfNeeded();
+  }
+
+  public async onIdle(): Promise<void> {
+    if (!this.active && this.waiting.length === 0) return;
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  private get totalCount(): number {
+    return this.waiting.length + (this.active ? 1 : 0);
+  }
+
+  private emitStats(): void {
     systemEvents.emit('queue:update', this.getStats());
   }
 
-  /**
-   * Waits until all currently executing and pending tasks are finished.
-   */
-  public async onIdle(): Promise<void> {
-    await this.tail;
+  private resolveIdleIfNeeded(): void {
+    if (this.active || this.waiting.length > 0) return;
+    const waiters = this.idleWaiters.splice(0);
+    for (const resolve of waiters) resolve();
+  }
+
+  private async drain(): Promise<void> {
+    if (this.active || this.isPausedState) return;
+
+    const entry = this.waiting.shift();
+    if (!entry) {
+      this.resolveIdleIfNeeded();
+      return;
+    }
+
+    this.active = true;
+    this.emitStats();
+    logger.queue(`Executing queued task [${entry.task.id}]`);
+    systemEvents.emit('task:start', entry.task);
+
+    let result: ExecutionResult;
+    try {
+      result = await entry.runner(entry.task.signal);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : String(err);
+      logger.error(`Task [${entry.task.id}] runner threw exception`, err);
+      result = {
+        success: false,
+        signal: entry.task.signal,
+        durationMs: 0,
+        error,
+      };
+    }
+
+    entry.resolve(result);
+    this.active = false;
+    this.emitStats();
+
+    if (this.waiting.length === 0) {
+      logger.queue('Queue is idle. All tasks completed.');
+      this.resolveIdleIfNeeded();
+      return;
+    }
+
+    if (!this.isPausedState) void this.drain();
   }
 }
 

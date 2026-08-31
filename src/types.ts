@@ -76,4 +76,7 @@ export interface AppConfig {
   chromeExecutablePath: string;
   chromeProfileName: string;
   autoLaunchChrome: boolean;
+  telegramPollIntervalMs: number;
+  telegramKeepAliveIntervalMs: number;
+  maxMessageAgeMs: number;
 }

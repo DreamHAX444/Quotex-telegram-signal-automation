@@ -320,7 +320,7 @@ async function ensurePageOnTarget(page: Page): Promise<void> {
  * Returns the active browser context and page. 
  * If launchIfNeeded is true, it will launch the browser if it isn't currently open.
  */
-async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ context: BrowserContext; page: Page } | null> {
+async function getBrowserAndPageUnlocked(launchIfNeeded: boolean): Promise<{ context: BrowserContext; page: Page } | null> {
   ensureDirectories();
 
   const isAlive = await isContextAlive();
@@ -458,6 +458,24 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
   }
 
   return { context: globalContext!, page };
+}
+
+let browserAcquireTail: Promise<void> = Promise.resolve();
+
+/** Prevents startup pre-warming, API refreshes, and queued signals from launching Chrome concurrently. */
+async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ context: BrowserContext; page: Page } | null> {
+  const previous = browserAcquireTail;
+  let release!: () => void;
+  browserAcquireTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+  try {
+    return await getBrowserAndPageUnlocked(launchIfNeeded);
+  } finally {
+    release();
+  }
 }
 
 export async function closeWarmBrowser(): Promise<void> {
@@ -1221,6 +1239,7 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
   } catch (error) {
     const durationMs = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const watchdogTimedOut = errorMessage.includes('WATCHDOG TIMEOUT');
     logger.error(`Browser automation failed for [${signal.action} ${signal.ticker}]`, error);
 
     if (page && !page.isClosed()) {
@@ -1236,6 +1255,16 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
       } catch (screenshotError) {
         logger.error('Failed to capture failure screenshot', screenshotError);
       }
+    }
+
+    if (watchdogTimedOut) {
+      // Promise.race does not cancel the losing operation. Closing the context interrupts
+      // Playwright work before the queue is allowed to start another task.
+      await closeWarmBrowser();
+      await Promise.race([
+        executionPromise.then(() => undefined).catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
     }
 
     return {

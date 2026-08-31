@@ -1,6 +1,7 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
-import { NewMessage, type NewMessageEvent, Raw } from 'telegram/events/index.js';
+import { NewMessage, type NewMessageEvent } from 'telegram/events/index.js';
+import { EditedMessage } from 'telegram/events/EditedMessage.js';
 import { Api } from 'telegram/tl/index.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -47,6 +48,8 @@ const client = new TelegramClient(session, config.apiId, config.apiHash, {
 
 let resolvedTargetEntity: any = null;
 let isPullingActive = false;
+let lastPullErrorLoggedAt = 0;
+const PULL_ERROR_LOG_INTERVAL_MS = 30_000;
 
 const processedMessageIds = new Set<number>();
 const lastSeenTextByMsgId = new Map<number, string>();
@@ -164,10 +167,16 @@ function printIncomingMessage(msgDetails: {
  * Common logic to parse and execute a message from the VIP channel
  */
 function processMessage(message: any): void {
-  if (!message || message.className === 'MessageService' || message.action) return;
+  if (!message || message.className === 'MessageService' || message.action || isShuttingDown) return;
 
   const rawText = message.message || message.text || '';
   if (!rawText.trim()) return;
+
+  const messageTimestampMs = (message.editDate || message.date || 0) * 1000;
+  if (messageTimestampMs > 0 && Date.now() - messageTimestampMs > config.maxMessageAgeMs) {
+    logger.debug(`Skipping stale Telegram message #${message.id || 'unknown'} (${Date.now() - messageTimestampMs}ms old).`);
+    return;
+  }
 
   const msgId = message.id;
   if (msgId !== undefined) {
@@ -297,39 +306,20 @@ function processMessage(message: any): void {
  * Handles incoming NewMessage and EditedMessage events from Telegram MTProto.
  */
 function handleNewMessage(event: NewMessageEvent): void {
-  systemStats.lastMessageAt = Date.now();
-  const message = event.message;
-  if (!message) return;
-
-  if (!isFromTargetChannel(message.peerId || message)) {
-    systemStats.messagesIgnored++;
-    systemEvents.emit('telemetry:update', systemStats);
-    return;
-  }
-
-  systemStats.messagesProcessed++;
-  systemEvents.emit('telemetry:update', systemStats);
-  processMessage(message);
-}
-
-/**
- * Handles raw MTProto update events (UpdateNewChannelMessage, UpdateEditChannelMessage, etc.)
- */
-function handleRawUpdate(update: any): void {
-  if (!update) return;
-
-  let msg = update.message;
-  if (!msg && update.messages && Array.isArray(update.messages)) {
-    msg = update.messages[0];
-  }
-
-  if (msg && msg.message) {
-    if (isFromTargetChannel(msg.peerId || msg)) {
-      systemStats.lastMessageAt = Date.now();
-      systemStats.messagesProcessed++;
-      systemEvents.emit('telemetry:update', systemStats);
-      processMessage(msg);
+  try {
+    const message = event.message;
+    if (!message || !isFromTargetChannel(message.peerId || message)) {
+      systemStats.messagesIgnored++;
+      return;
     }
+
+    systemStats.lastMessageAt = Date.now();
+    systemStats.messagesProcessed++;
+    processMessage(message);
+  } catch (err) {
+    logger.error('Telegram event handler failed safely', err);
+  } finally {
+    systemEvents.emit('telemetry:update', systemStats);
   }
 }
 
@@ -418,19 +408,14 @@ async function resolveTargetChannel(): Promise<void> {
       }
     }
 
-    // 3. Prime message cache with recent channel messages so old history is not retroactively executed
+    // 3. Prime message cache so history is displayed but never retroactively executed
     if (resolvedTargetEntity) {
       try {
         const recentMessages = await client.getMessages(resolvedTargetEntity, { limit: 25 });
-        const nowSec = Math.floor(Date.now() / 1000);
         for (const msg of recentMessages) {
           if (msg && msg.id) {
-            const ageSec = nowSec - (msg.date || 0);
-            // Mark messages older than 60s as already processed
-            if (ageSec > 60) {
-              processedMessageIds.add(msg.id);
-              if (msg.message) lastSeenTextByMsgId.set(msg.id, msg.message);
-            }
+            processedMessageIds.add(msg.id);
+            if (msg.message) lastSeenTextByMsgId.set(msg.id, msg.message);
 
             // Populate the recent channel messages feed
             if (msg.message) {
@@ -502,13 +487,16 @@ async function pullLatestChannelMessages(): Promise<void> {
       const seconds = match ? parseInt(match[0], 10) : 30;
       pullBackoffUntil = Date.now() + (seconds * 1000);
       logger.warn(`Telegram rate limit (FLOOD_WAIT) on active puller. Backing off for ${seconds} seconds.`);
-      
+
       systemEvents.recordConnectionLog({
         id: 'flood-' + Date.now(),
         timestamp: new Date().toISOString(),
         type: 'ERROR',
         message: `Active puller rate limited. Pausing puller for ${seconds}s.`,
       });
+    } else if (Date.now() - lastPullErrorLoggedAt >= PULL_ERROR_LOG_INTERVAL_MS) {
+      lastPullErrorLoggedAt = Date.now();
+      logger.warn(`Telegram fallback pull failed: ${errorMsg}`);
     }
   } finally {
     isPullingActive = false;
@@ -593,50 +581,78 @@ export async function pingTelegramConnection(): Promise<{ success: boolean; late
   }
 }
 
-let isReconnectingInProgress = false;
+let reconnectPromise: Promise<boolean> | null = null;
 
-/**
- * Force reconnect Telegram client
- */
-export async function reconnectTelegramClient(): Promise<boolean> {
-  if (isReconnectingInProgress) {
-    logger.warn('Reconnect already in progress, skipping concurrent trigger.');
-    return false;
-  }
-  isReconnectingInProgress = true;
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function connectWithTimeout(timeoutMs = 15000): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    systemEvents.recordConnectionLog({
-      id: 'recon-' + Date.now(),
-      timestamp: new Date().toISOString(),
-      type: 'RECONNECT',
-      message: 'Forcing Telegram MTProto disconnect and reconnect...',
-    });
-    await client.disconnect();
-    await client.connect();
-    await resolveTargetChannel();
-    systemStats.status = 'Connected';
-    systemEvents.recordConnectionLog({
-      id: 'recon-ok-' + Date.now(),
-      timestamp: new Date().toISOString(),
-      type: 'CONNECT',
-      message: 'Telegram MTProto reconnected successfully and target channel rebound.',
-    });
+    await Promise.race([
+      client.connect(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Telegram connection timed out')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Reconnects once for all concurrent callers, with bounded exponential backoff. */
+export function reconnectTelegramClient(): Promise<boolean> {
+  if (reconnectPromise) return reconnectPromise;
+
+  reconnectPromise = (async () => {
+    systemStats.status = 'Reconnecting...';
     systemEvents.emit('telemetry:update', systemStats);
-    return true;
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+
+    for (let attempt = 1; attempt <= 5 && !isShuttingDown; attempt++) {
+      try {
+        systemEvents.recordConnectionLog({
+          id: `recon-${Date.now()}-${attempt}`,
+          timestamp: new Date().toISOString(),
+          type: 'RECONNECT',
+          message: `Telegram reconnect attempt ${attempt}/5...`,
+        });
+        await client.disconnect().catch(() => undefined);
+        await connectWithTimeout();
+        await resolveTargetChannel();
+        systemStats.status = 'Connected';
+        systemEvents.recordConnectionLog({
+          id: 'recon-ok-' + Date.now(),
+          timestamp: new Date().toISOString(),
+          type: 'CONNECT',
+          message: 'Telegram MTProto reconnected and target channel rebound.',
+        });
+        systemEvents.emit('telemetry:update', systemStats);
+        return true;
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.warn(`Telegram reconnect attempt ${attempt}/5 failed: ${errorMsg}`);
+        if (attempt < 5) {
+          const backoffMs = Math.min(1000 * (2 ** (attempt - 1)), 15000) + Math.floor(Math.random() * 500);
+          await delay(backoffMs);
+        }
+      }
+    }
+
     systemStats.status = 'Error';
     systemEvents.recordConnectionLog({
       id: 'recon-fail-' + Date.now(),
       timestamp: new Date().toISOString(),
       type: 'ERROR',
-      message: `Reconnect failed: ${errorMsg}`,
+      message: 'Telegram reconnect failed after 5 attempts.',
     });
     systemEvents.emit('telemetry:update', systemStats);
     return false;
-  } finally {
-    isReconnectingInProgress = false;
-  }
+  })().finally(() => {
+    reconnectPromise = null;
+  });
+
+  return reconnectPromise;
 }
 
 /**
@@ -652,9 +668,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   logger.info(`Received ${signal}. Initiating graceful shutdown...`);
 
-  // 1. Pause incoming tasks and wait for active task to drain
+  // 1. Stop intake, cancel waiting work, and let only the active task finish.
   automationQueue.pause();
-  logger.info('Waiting for pending tasks in queue to finish...');
+  automationQueue.clear();
+  logger.info('Waiting for the active automation task to finish...');
   await automationQueue.onIdle();
 
   // 2. Clear timers
@@ -715,7 +732,7 @@ async function bootstrap(): Promise<void> {
       message: 'Connecting to Telegram MTProto Gateway...',
     });
 
-    await client.connect();
+    await connectWithTimeout();
     systemStats.status = 'Connected';
 
     const me = await client.getMe();
@@ -739,19 +756,22 @@ async function bootstrap(): Promise<void> {
 
     // Attach real-time event listeners
     client.addEventHandler(handleNewMessage, new NewMessage({}));
-    client.addEventHandler(handleRawUpdate, new Raw({}));
-    logger.info(`Telegram Listeners attached for VIP Channel [${config.vipChannelIdRaw}]. Listening for signals...`);
+    client.addEventHandler(handleNewMessage, new EditedMessage({}));
+    logger.info(`Telegram listeners attached for VIP Channel [${config.vipChannelIdRaw}]. New and edited signals are handled instantly.`);
 
     // Listen for live channel switches from dashboard
     systemEvents.on('channel:switch', async () => {
       logger.telegram(`Channel switch detected from Dashboard. Re-resolving VIP Channel [${config.vipChannelIdRaw}]...`);
+      processedMessageIds.clear();
+      lastSeenTextByMsgId.clear();
+      systemEvents.clearChannelMessages();
       await resolveTargetChannel();
     });
 
-    // Layer 2 Active Channel Puller Interval (polls every 3500ms)
+    // Layer 2 fallback puller catches rare MTProto update gaps; push events remain the instant primary path.
     pullIntervalRef = setInterval(() => {
       void pullLatestChannelMessages();
-    }, 3500);
+    }, config.telegramPollIntervalMs);
 
     // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
     keepAliveIntervalRef = setInterval(async () => {
@@ -787,33 +807,11 @@ async function bootstrap(): Promise<void> {
       }
 
       if (!isActuallyConnected) {
-        logger.warn('⚠️ Telegram client disconnected or unresponsive! Forcing reconnect...');
-        try {
-          await client.disconnect();
-          await client.connect();
-          await resolveTargetChannel();
-          logger.info('✅ Active ping reconnect successful.');
-          systemStats.status = 'Connected';
-          systemEvents.emit('telemetry:update', systemStats);
-          systemEvents.recordConnectionLog({
-            id: 'recon-auto-' + Date.now(),
-            timestamp: new Date().toISOString(),
-            type: 'CONNECT',
-            message: 'Auto-reconnect after ping failure successful.',
-          });
-        } catch (e) {
-          logger.error('❌ Active ping reconnect failed.', e);
-          systemStats.status = 'Error';
-          systemEvents.emit('telemetry:update', systemStats);
-          systemEvents.recordConnectionLog({
-            id: 'recon-auto-err-' + Date.now(),
-            timestamp: new Date().toISOString(),
-            type: 'ERROR',
-            message: `Auto-reconnect failed: ${e instanceof Error ? e.message : String(e)}`,
-          });
-        }
+        logger.warn('Telegram client disconnected or unresponsive. Starting coordinated reconnect...');
+        const reconnected = await reconnectTelegramClient();
+        if (!reconnected) logger.error('Telegram auto-reconnect exhausted all retries.');
       }
-    }, 45000);
+    }, config.telegramKeepAliveIntervalMs);
 
     // Pre-warm Chrome profile on startup
     if (config.autoLaunchChrome) {

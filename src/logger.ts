@@ -22,7 +22,7 @@ const colors = {
   TELEGRAM: '\x1b[32m'  // Green
 };
 
-export interface LogEntry {
+interface LogEntry {
   timestamp: string;
   level: string;
   message: string;

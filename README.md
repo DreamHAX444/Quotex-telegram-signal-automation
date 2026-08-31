@@ -76,7 +76,6 @@ cortex-automation/
 ├── .env.example          # Environment variables template
 ├── package.json          # Node dependencies and execution scripts
 ├── tsconfig.json         # Strict TypeScript compiler options
-├── dashboard.html        # Glassmorphism live dashboard with real-time balance
 ├── screenshots/          # Local storage for error debug screenshots
 ├── .auth/                # Ignored in git; stores browser cookies & localStorage
 └── src/
@@ -84,7 +83,6 @@ cortex-automation/
     ├── logger.ts         # Structured, timestamped logger
     ├── config.ts         # Environment validation and BigInt channel ID normalization
     ├── balance.ts        # Multi-strategy balance extractor & state store
-    ├── check-balance.ts  # Standalone CLI tool to verify live balance
     ├── parser.ts         # Deterministic regex matching & strict validation
     ├── executor.ts       # Playwright worker with storageState & balance capture
     ├── queue.ts          # PQueue sequential task queue manager
@@ -141,34 +139,7 @@ cortex-automation/
 
 ### 4. Setting the VIP Channel ID
 
-In your `.env` file, set `VIP_CHANNEL_ID` to your target private channel's numerical ID.
-
-#### Discover Channel IDs Automatically:
-To view all channels/groups your account has joined along with their numerical IDs, run:
-```bash
-npm run list-channels
-```
-This displays a formatted table in the terminal with Channel Title, Username, and numerical `botApiId` / `rawId`.
-
-### 5. Checking & Verifying Account Balance
-
-To test balance extraction directly against your live browser:
-```bash
-npm run check-balance
-```
-This connects to your configured Chrome profile, inspects the trading interface (`market-qx.info`), extracts the active account type (Live / Demo) and balance figure, and outputs a formatted table.
-
-### 6. Selecting Your Google Chrome Profile
-
-To view all Google Chrome profiles installed on your computer and select which one to use:
-```bash
-npm run list-profiles
-```
-This inspects Chrome's profile metadata and displays an interactive table with:
-* Profile Folder (e.g. `Default`, `Profile 1`, `Profile 2`)
-* Display Name (e.g. `Personal`, `Trading`)
-* Associated Google Account Email
-* Interactive selector that updates `CHROME_PROFILE_NAME` in `.env` automatically!
+In your `.env` file, set `VIP_CHANNEL_ID` to your target private channel's numerical ID (e.g. `-1001771915378`).
 
 ---
 

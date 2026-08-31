@@ -1,4 +1,4 @@
-export interface SystemStatsType {
+interface SystemStatsType {
   status: string;
   lastCheckedAt: number;
   lastPingAt: number;
@@ -14,7 +14,7 @@ export interface SystemStatsType {
 }
 
 export const systemStats: SystemStatsType = {
-  status: 'Disconnected',
+  status: 'offline',
   lastCheckedAt: 0,
   lastPingAt: 0,
   lastMessageAt: 0,

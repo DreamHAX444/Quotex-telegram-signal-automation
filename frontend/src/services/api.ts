@@ -3,11 +3,6 @@ import type {
   AccountBalance, 
   BalanceHistoryEntry, 
   ChannelMessageItem,
-  ConnectionLogEntry,
-  DashboardSettings, 
-  ExecutedTradeRecord, 
-  LogEntry, 
-  SystemTelemetryState,
   TradeSignal 
 } from './liveStream';
 
@@ -15,13 +10,6 @@ export interface BalanceResponse {
   success: boolean;
   balance: AccountBalance | null;
   history?: BalanceHistoryEntry[];
-  error?: string;
-}
-
-export interface SettingsResponse {
-  defaultAccount: 'Live' | 'Demo';
-  availableChannels: { id: string; name: string }[];
-  success?: boolean;
   error?: string;
 }
 
@@ -42,7 +30,7 @@ export interface TestSignalResponse {
 export interface GenericResponse {
   success: boolean;
   error?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 const API_BASE = '';
@@ -63,24 +51,8 @@ async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  async fetchBalance(): Promise<BalanceResponse> {
-    return fetchApi<BalanceResponse>(`${API_BASE}/api/balance`);
-  },
-
   async refreshBalance(): Promise<BalanceResponse> {
     return fetchApi<BalanceResponse>(`${API_BASE}/api/balance/refresh`, { method: 'POST' });
-  },
-
-  async fetchLogs(): Promise<LogEntry[]> {
-    return fetchApi<LogEntry[]>(`${API_BASE}/logs`);
-  },
-
-  async fetchSystemStatus(): Promise<SystemTelemetryState> {
-    return fetchApi<SystemTelemetryState>(`${API_BASE}/api/status`);
-  },
-
-  async fetchSettings(): Promise<DashboardSettings> {
-    return fetchApi<DashboardSettings>(`${API_BASE}/api/settings`);
   },
 
   async saveChannels(channels: { id: string; name: string }[]): Promise<GenericResponse> {
@@ -100,19 +72,6 @@ export const api = {
     return !!data.success;
   },
 
-  async setActiveAccount(type: 'Live' | 'Demo'): Promise<boolean> {
-    const data = await fetchApi<GenericResponse>(`${API_BASE}/api/switch-account`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeType: type })
-    });
-    return !!data.success;
-  },
-
-  async fetchActiveChannel(): Promise<string | null> {
-    const data = await fetchApi<{ currentChannel?: string }>(`${API_BASE}/api/channel`);
-    return data.currentChannel || null;
-  },
 
   async setActiveChannel(channelId: string): Promise<boolean> {
     const data = await fetchApi<GenericResponse>(`${API_BASE}/api/channel/switch`, {
@@ -131,13 +90,6 @@ export const api = {
     });
   },
 
-  async fetchExecutions(): Promise<ExecutedTradeRecord[]> {
-    return fetchApi<ExecutedTradeRecord[]>(`${API_BASE}/api/executions`);
-  },
-
-  async fetchChannelMessages(): Promise<ChannelMessageItem[]> {
-    return fetchApi<ChannelMessageItem[]>(`${API_BASE}/api/channel/messages`);
-  },
 
   async forceFetchChannelMessages(): Promise<{ success: boolean; messages: ChannelMessageItem[] }> {
     return fetchApi<{ success: boolean; messages: ChannelMessageItem[] }>(`${API_BASE}/api/channel/messages/fetch`, {
@@ -145,9 +97,6 @@ export const api = {
     });
   },
 
-  async fetchConnectionLogs(): Promise<ConnectionLogEntry[]> {
-    return fetchApi<ConnectionLogEntry[]>(`${API_BASE}/api/connection/logs`);
-  },
 
   async pingTelegramConnection(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
     return fetchApi<{ success: boolean; latencyMs: number; error?: string }>(`${API_BASE}/api/connection/ping`, {

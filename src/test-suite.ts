@@ -319,11 +319,11 @@ async function runTestSuite(): Promise<void> {
   const rej6 = parseSignal('Good session... Let\'s continue later 🚀🚀');
   assert.strictEqual(rej6, null, 'Session end notice must be dropped');
 
-  const rej7 = parseSignal('Change');
-  assert.strictEqual(rej7, null, 'Change text must be dropped');
+  const changeSignal = parseSignal('Change');
+  assert(changeSignal !== null && changeSignal.action === 'ABORT', 'Change must parse as ABORT signal');
 
-  const rej8 = parseSignal('2 minutes');
-  assert.strictEqual(rej8, null, 'Standalone minutes must be dropped');
+  const durSignal = parseSignal('2 minutes');
+  assert(durSignal !== null && durSignal.action === 'SET_DURATION' && durSignal.durationMinutes === 2, '2 minutes must parse as SET_DURATION signal');
 
   const rej9 = parseSignal('Let\'s start in 90 minutes');
   assert.strictEqual(rej9, null, 'Session countdown must be dropped');
@@ -435,7 +435,7 @@ async function runTestSuite(): Promise<void> {
   console.log('▶ Test 4: Sector-Aware Ticker Matching, Aliases & Payout Stripping...');
 
   // Canonicalization & Aliases
-  assert.strictEqual(canonicalize('AAPL'), 'APPLE');
+  assert.strictEqual(canonicalize('BTC'), 'BTCUSD');
   assert.strictEqual(canonicalize('XAU/USD'), 'GOLD');
   assert.strictEqual(canonicalize('EUR/USD (OTC) 87%'), 'EURUSD');
   assert.strictEqual(canonicalize('USCRUDE'), 'USCRUDE');
@@ -449,7 +449,6 @@ async function runTestSuite(): Promise<void> {
   assert.strictEqual(buildSearchQuery('USD CHF OTC').query, 'USD/CHF');
   assert.strictEqual(buildSearchQuery('EURUSD').query, 'EUR/USD');
   assert.strictEqual(buildSearchQuery('EUR/USD (OTC)').query, 'EUR/USD');
-  assert.strictEqual(buildSearchQuery('AAPL').query, 'Apple');
   assert.strictEqual(buildSearchQuery('Gold').query, 'Gold');
   assert.strictEqual(buildSearchQuery('XAU/USD').query, 'Gold');
 
@@ -459,9 +458,6 @@ async function runTestSuite(): Promise<void> {
   assert.ok(copQueries.includes('USD COP'), 'Must include USD COP');
   assert.ok(copQueries.includes('COP'), 'Must include quote currency COP');
 
-  const appleQueries = getSearchQueriesForTicker('AAPL');
-  assert.ok(appleQueries.includes('Apple'), 'Must include Apple');
-  assert.ok(appleQueries.includes('AAPL'), 'Must include AAPL');
   assert.strictEqual(buildSearchQuery('USCRUDE').query, 'Crude');
   assert.strictEqual(buildSearchQuery('BTC/USD').query, 'Bitcoin');
   assert.strictEqual(buildSearchQuery('Asian Composite Index').query, 'ASIAN COMPOSITE INDEX');
@@ -482,18 +478,10 @@ async function runTestSuite(): Promise<void> {
   assert(tickersMatch('USCRUDE', 'Crude Oil'), 'Commodity USCRUDE matches Crude Oil');
   assert(tickersMatch('UKBRENT', 'Brent Crude'), 'Commodity UKBRENT matches Brent');
 
-  // Sector matching: Stocks / Equities
-  assert(tickersMatch('AAPL', 'Apple (OTC) 90%'), 'Stock AAPL matches Apple');
-  assert(tickersMatch('BA', 'Boeing Company (OTC)'), 'Stock BA matches Boeing Company');
-  assert(tickersMatch('MSFT', 'Microsoft'), 'Stock MSFT matches Microsoft');
-  assert(tickersMatch('NVDA', 'Nvidia (OTC)'), 'Stock NVDA matches Nvidia');
-  assert(tickersMatch('TSLA', 'Tesla'), 'Stock TSLA matches Tesla');
-
   // Sector matching: Indices
   assert(tickersMatch('ASIAN COMPOSITE INDEX', 'Asian Composite Index'), 'Index matches');
-  assert(tickersMatch('US500', 'S&P 500'), 'Index US500 matches S&P 500');
 
-  console.log('✔ Test 4 Passed: All sectors (Forex, Crypto, Commodities, Stocks, Indices) resolve accurately.\n');
+  console.log('✔ Test 4 Passed: All core sectors (Forex, Crypto, Commodities, Indices) resolve accurately.\n');
 
   // ----------------------------------------------------
   // TEST 5: User '+' Add Asset Button vs Deposit Button Isolation

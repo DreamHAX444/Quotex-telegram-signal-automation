@@ -3,32 +3,13 @@ import fs from 'node:fs';
 import type { AppConfig } from './types.js';
 import { logger } from './logger.js';
 
-// Auto-load .env if not loaded by runner
-function loadEnvFile(): void {
-  try {
-    const envPath = path.resolve(process.cwd(), '.env');
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf8');
-      const lines = content.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx > 0) {
-          const key = trimmed.slice(0, eqIdx).trim();
-          const val = trimmed.slice(eqIdx + 1).trim().replace(/^["'](.*)["']$/, '$1');
-          if (!process.env[key]) {
-            process.env[key] = val;
-          }
-        }
-      }
-    }
-  } catch {}
-}
+// Auto-load .env natively if available
+try {
+  process.loadEnvFile?.();
+} catch {}
 
-loadEnvFile();
 
-export function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
+function parseChannelId(raw: string): { raw: string; bigIntVal: bigint } {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error('VIP_CHANNEL_ID environment variable cannot be empty.');

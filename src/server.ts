@@ -17,7 +17,7 @@ import {
   reconnectTelegramClient 
 } from './bot.js';
 
-const PORT = parseInt(process.env.PORT || '8080', 10);
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const SETTINGS_PATH = path.join(process.cwd(), 'cortex-settings.json');
 
 const DEFAULT_SETTINGS = {
@@ -244,10 +244,17 @@ export function startDashboardServer(port = PORT) {
 
         // 3. Keepalive Heartbeat Ping every 5 seconds
         const keepAlivePing = setInterval(() => {
-          res.write(`event: ping\ndata: ${JSON.stringify({ serverTime: Date.now() })}\n\n`);
+          try {
+            res.write(`event: ping\ndata: ${JSON.stringify({ serverTime: Date.now() })}\n\n`);
+          } catch {
+            cleanupSSE();
+          }
         }, 5000);
 
-        req.on('close', () => {
+        let isCleanedUp = false;
+        const cleanupSSE = () => {
+          if (isCleanedUp) return;
+          isCleanedUp = true;
           clearInterval(keepAlivePing);
           systemEvents.off('balance:update', onBalance);
           systemEvents.off('telemetry:update', onTelemetry);
@@ -260,51 +267,28 @@ export function startDashboardServer(port = PORT) {
           systemEvents.off('connection:log', onConnectionLog);
           systemEvents.off('settings:update', onSettings);
           logEmitter.off('log', onLog);
-        });
+        };
+
+        req.on('close', cleanupSSE);
+        req.on('error', cleanupSSE);
+        res.on('close', cleanupSSE);
+        res.on('finish', cleanupSSE);
+        res.on('error', cleanupSSE);
         return;
       }
 
       // -------------------------------------------------------------
       // 2. REST API ENDPOINTS
       // -------------------------------------------------------------
-      if (pathname === '/api/status' && req.method === 'GET') {
-        const q = automationQueue.getStats();
-        jsonResponse(200, {
-          ...systemStats,
-          uptimeMs: Date.now() - systemStats.startedAt,
-          queuePending: q.pending,
-          queueSize: q.size,
-          isQueuePaused: q.isPaused,
-        });
-      } else if (pathname === '/api/health' && req.method === 'GET') {
-        jsonResponse(200, {
-          status: 'ok',
-          uptime: Math.floor((Date.now() - systemStats.startedAt) / 1000),
-          telegram: systemStats.status,
-          memory: process.memoryUsage(),
-          queue: automationQueue.getStats()
-        });
-      } else if (pathname === '/logs' || pathname === '/api/logs') {
-        jsonResponse(200, logger.getLogs());
-      } else if (pathname === '/api/channel/messages' && req.method === 'GET') {
-        jsonResponse(200, systemEvents.getChannelMessages());
-      } else if (pathname === '/api/channel/messages/fetch' && req.method === 'POST') {
+      if (pathname === '/api/channel/messages/fetch' && req.method === 'POST') {
         const messages = await forceFetchChannelMessages(30);
         jsonResponse(200, { success: true, messages });
-      } else if (pathname === '/api/connection/logs' && req.method === 'GET') {
-        jsonResponse(200, systemEvents.getConnectionLogs());
       } else if (pathname === '/api/connection/ping' && req.method === 'POST') {
         const pingRes = await pingTelegramConnection();
         jsonResponse(200, pingRes);
       } else if (pathname === '/api/connection/reconnect' && req.method === 'POST') {
         const ok = await reconnectTelegramClient();
         jsonResponse(200, { success: ok });
-      } else if (pathname === '/api/balance' || pathname === '/balance') {
-        jsonResponse(200, {
-          success: true,
-          balance: balanceManager.getCurrentBalance(),
-          history: balanceManager.getBalanceHistory(),
-        });
       } else if (pathname === '/api/balance/refresh') {
         const fresh = await fetchLiveBalance();
         jsonResponse(200, {
@@ -312,28 +296,6 @@ export function startDashboardServer(port = PORT) {
           balance: fresh,
           history: balanceManager.getBalanceHistory(),
         });
-      } else if (pathname === '/api/executions' && req.method === 'GET') {
-        jsonResponse(200, systemEvents.getExecutionHistory());
-      } else if (pathname === '/api/switch-account' && req.method === 'POST') {
-        const data = (await parseJsonBody(req)) as { activeType?: string };
-        const type = data.activeType;
-        if (type !== 'Live' && type !== 'Demo') {
-          return jsonResponse(400, { success: false, error: 'Invalid account type. Must be Live or Demo.' });
-        }
-
-        const task: AutomationTask = {
-          id: 'dash-switch-' + Date.now(),
-          signal: {
-            action: (type === 'Live' ? 'SWITCH_LIVE' : 'SWITCH_DEMO') as ActionType,
-            ticker: '',
-            rawText: `Switching to ${type} via Dashboard`,
-            timestamp: new Date()
-          },
-          receivedAt: new Date()
-        };
-
-        const result = await automationQueue.enqueue(task, executeAutomation);
-        jsonResponse(200, { success: result.success, error: result.error });
       } else if (pathname === '/api/settings/default-account' && req.method === 'POST') {
         const data = (await parseJsonBody(req)) as { defaultType?: string };
         const type = data.defaultType;
@@ -342,9 +304,6 @@ export function startDashboardServer(port = PORT) {
           return jsonResponse(200, { success: true, defaultAccount: type });
         }
         jsonResponse(400, { success: false, error: 'Invalid default account type' });
-      } else if (pathname === '/api/settings' && req.method === 'GET') {
-        const settings = await loadSettings();
-        jsonResponse(200, settings);
       } else if (pathname === '/api/settings/channels' && req.method === 'POST') {
         const data = (await parseJsonBody(req)) as { channels?: { id: string; name: string }[] };
         if (Array.isArray(data.channels)) {
@@ -352,8 +311,6 @@ export function startDashboardServer(port = PORT) {
           return jsonResponse(200, { success: true, availableChannels: data.channels });
         }
         jsonResponse(400, { success: false, error: 'Channels must be an array of { id, name } objects' });
-      } else if (pathname === '/api/channel' && req.method === 'GET') {
-        jsonResponse(200, { currentChannel: config.vipChannelIdRaw });
       } else if (pathname === '/api/channel/switch' && req.method === 'POST') {
         const data = (await parseJsonBody(req)) as { channel?: string };
         if (!data.channel || typeof data.channel !== 'string') {

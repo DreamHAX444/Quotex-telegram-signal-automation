@@ -78,13 +78,13 @@ function App() {
           '⚠️ WARNING: You are switching Cortex to LIVE account mode. Real money will be used for automated broker trades following VIP channel signals. Ensure your risk settings and position sizing are verified.',
         action: async () => {
           liveStream.setOptimisticAccount('Live');
-          await api.setActiveAccount('Live');
+          await api.setStartupDefault('Live');
           await handleRefreshBalance();
         },
       });
     } else {
       liveStream.setOptimisticAccount('Demo');
-      api.setActiveAccount('Demo').then(() => handleRefreshBalance());
+      api.setStartupDefault('Demo').then(() => handleRefreshBalance());
     }
   };
 

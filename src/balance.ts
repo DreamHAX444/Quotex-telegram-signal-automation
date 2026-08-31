@@ -34,7 +34,7 @@ const KNOWN_CURRENCIES: Record<string, string> = {
  * Robust parsing utility for extracting currency symbol, code, and numeric float value
  * from localized monetary strings (e.g. "$10,450.20", "€ 1.250,50", "10 000.00 USD", "₹85,000.00").
  */
-export function parseCurrencyAndNumber(raw: string): {
+function parseCurrencyAndNumber(raw: string): {
   numericValue: number;
   currency: string;
   formatted: string;
@@ -103,7 +103,7 @@ export function parseCurrencyAndNumber(raw: string): {
 /**
  * Multi-Strategy Balance Extractor executed in browser page context
  */
-export async function extractBalanceFromPage(page: Page): Promise<AccountBalance | null> {
+async function extractBalanceFromPage(page: Page): Promise<AccountBalance | null> {
   try {
     // Wait briefly for UI elements to render if page just loaded
     await page.waitForLoadState('domcontentloaded').catch(e => logger.warn('waitForLoadState error', e));

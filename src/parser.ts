@@ -4,7 +4,7 @@ import { logger } from './logger.js';
 /**
  * Strips timeframe suffixes and noise from ticker names (e.g. "USD/JPY 1M" -> "USD/JPY")
  */
-export function cleanTicker(raw?: string | null): string {
+function cleanTicker(raw?: string | null): string {
   if (!raw) return '';
   return raw
     .replace(/\b(?:[0-9]+\s*M|[0-9]+\s*MIN(?:UTE)?S?|[0-9]+\s*H(?:OUR)?S?|NOW)\b/gi, '')
@@ -15,7 +15,7 @@ export function cleanTicker(raw?: string | null): string {
 /**
  * Extracts duration in minutes from raw text (e.g. "5M", "2 MINUTES", "1H")
  */
-export function extractDurationMinutes(text: string): number | undefined {
+function extractDurationMinutes(text: string): number | undefined {
   const match = text.match(/\b(?:([0-9]+)\s*(?:M|MIN(?:UTE)?S?)|([0-9]+)\s*H(?:OUR)?S?)\b/i);
   if (match) {
     if (match[1]) return parseInt(match[1], 10);
@@ -24,24 +24,12 @@ export function extractDurationMinutes(text: string): number | undefined {
   return undefined;
 }
 
-/**
- * Normalizes various raw ticker formats (e.g., "USD CHF OTC", "USD CHF", "USD/CHF", "eur usd")
- * into a canonical search string (e.g., "USD/CHF").
- */
-export function normalizeTicker(rawTicker?: string | null): string {
-  if (!rawTicker || typeof rawTicker !== 'string') return '';
-  let searchName = cleanTicker(rawTicker).replace(/OTC/i, '').trim();
-  if (!searchName.includes('/') && searchName.includes(' ')) {
-    const parts = searchName.split(/\s+/);
-    if (parts.length >= 2) searchName = `${parts[0]}/${parts[1]}`;
-  }
-  return searchName.toUpperCase();
-}
+
 
 /**
  * Normalizes action strings to canonical ActionType (UP, DOWN, PREPARE, BALANCE, etc.)
  */
-export function normalizeAction(rawAction?: string | null): ActionType {
+function normalizeAction(rawAction?: string | null): ActionType {
   if (!rawAction) return 'UP';
   const upper = rawAction.toUpperCase().trim();
   if (['UP', 'CALL', 'BUY', 'HIGHER', 'GREEN'].includes(upper)) {
@@ -83,7 +71,7 @@ const DECORATIVE_EMOJIS = ['🚀', '⚡', '⏱️', '⏰', '📊', '🔍', '🚨
 /**
  * Words that represent chat, status, results, or actions that must NEVER be parsed as tickers
  */
-export const NON_SIGNAL_WORDS = new Set([
+const NON_SIGNAL_WORDS = new Set([
   'PROFIT', 'WIN', 'WINNER', 'LOSS', 'LOST', 'RESULT', 'RESULTS',
   'CHANGE', 'UPDATE', 'UPDATES', 'SESSION', 'SESSIONS', 'CLOSED',
   'START', 'STARTED', 'STARTING', 'CANCEL', 'CANCELED', 'CANCELLED',
@@ -102,7 +90,7 @@ export const NON_SIGNAL_WORDS = new Set([
 /**
  * Common Forex, OTC, Crypto & Commodity ticker codes
  */
-export const VALID_CURRENCY_CODES = new Set([
+const VALID_CURRENCY_CODES = new Set([
   // Major, Minor, and OTC Currencies
   'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD',
   'BRL', 'MXN', 'INR', 'IDR', 'EGP', 'PKR', 'BDT', 'RUB',
@@ -134,14 +122,14 @@ let activeSignalContext: SignalContextState = {
 
 const CONTEXT_EXPIRATION_MS = 180_000; // 3 minutes TTL for multi-message context
 
-export function getSignalContext(): SignalContextState {
+function getSignalContext(): SignalContextState {
   if (activeSignalContext.ticker && Date.now() - activeSignalContext.timestamp > CONTEXT_EXPIRATION_MS) {
     activeSignalContext.ticker = null;
   }
   return activeSignalContext;
 }
 
-export function updateSignalContext(partial: Partial<SignalContextState>): void {
+function updateSignalContext(partial: Partial<SignalContextState>): void {
   activeSignalContext = {
     ...activeSignalContext,
     ...partial,
@@ -149,7 +137,7 @@ export function updateSignalContext(partial: Partial<SignalContextState>): void 
   };
 }
 
-export function clearSignalContext(): void {
+function clearSignalContext(): void {
   activeSignalContext = {
     ticker: null,
     durationMinutes: 1,
@@ -160,7 +148,7 @@ export function clearSignalContext(): void {
 /**
  * Validates whether a candidate string is a plausible trading asset / ticker.
  */
-export function isValidTicker(rawTicker?: string | null): boolean {
+function isValidTicker(rawTicker?: string | null): boolean {
   if (!rawTicker || typeof rawTicker !== 'string') return false;
 
   const cleaned = cleanTicker(rawTicker).replace(/OTC/i, '').replace(/[^A-Za-z0-9\/\-\s]/g, '').trim().toUpperCase();
@@ -337,17 +325,6 @@ const SIGNAL_PATTERNS: Array<{
   regex: RegExp;
   extract: (match: RegExpExecArray, rawText: string) => TradeSignal | null;
 }> = [
-  // Pattern 0a: SWITCH ACCOUNT TRIGGER
-  {
-    name: 'SWITCH_ACCOUNT_TRIGGER',
-    regex: /^(?:SWITCH\s+TO\s+|SWITCH\s+|CHANGE\s+TO\s+|CHANGE\s+|USE\s+)?(LIVE|DEMO)(?:\s+ACCOUNT)?$/i,
-    extract: (match, rawText) => ({
-      action: match[1]!.toUpperCase() === 'LIVE' ? 'SWITCH_LIVE' : 'SWITCH_DEMO',
-      ticker: 'ACCOUNT',
-      rawText,
-      timestamp: new Date(),
-    }),
-  },
   // Pattern 0: ACCOUNT BALANCE TRIGGER
   {
     name: 'BALANCE_TRIGGER',

@@ -1,4 +1,9 @@
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { type BrowserContext, type Page } from 'playwright';
+import { chromium } from 'playwright-extra';
+import stealth from 'puppeteer-extra-plugin-stealth';
+
+// Configure stealth plugin to bypass Cloudflare/Quotex fingerprinting
+chromium.use(stealth());
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -38,7 +43,7 @@ export function setActiveMarket(market: string | null): void {
  * ═══════════════════════════════════════════════════════════════════
  * Covers all asset classes: Forex, Crypto, Commodities, Stocks, Indices.
  */
-export const TICKER_ALIASES: Record<string, string[]> = {
+const TICKER_ALIASES: Record<string, string[]> = {
   // Commodities
   GOLD: ['XAU', 'XAUUSD', 'GOLD'],
   SILVER: ['XAG', 'XAGUSD', 'SILVER'],
@@ -53,30 +58,6 @@ export const TICKER_ALIASES: Record<string, string[]> = {
   DOGEUSD: ['DOGE', 'DOGECOIN', 'DOGEUSD'],
   LTCUSD: ['LTC', 'LITECOIN', 'LTCUSD'],
   BNBUSD: ['BNB', 'BINANCECOIN', 'BNBUSD'],
-  ADAUSD: ['ADA', 'CARDANO', 'ADAUSD'],
-  DOTUSD: ['DOT', 'POLKADOT', 'DOTUSD'],
-  TRXUSD: ['TRX', 'TRON', 'TRXUSD'],
-  // Stocks / Equities
-  APPLE: ['AAPL', 'APPLE'],
-  MICROSOFT: ['MSFT', 'MICROSOFT'],
-  GOOGLE: ['GOOGL', 'GOOG', 'ALPHABET', 'GOOGLE'],
-  AMAZON: ['AMZN', 'AMAZON'],
-  META: ['META', 'FB', 'FACEBOOK'],
-  TESLA: ['TSLA', 'TESLA'],
-  NVIDIA: ['NVDA', 'NVIDIA'],
-  BOEING: ['BA', 'BOEING', 'BOEINGCOMPANY'],
-  INTEL: ['INTC', 'INTEL'],
-  PFIZER: ['PFE', 'PFIZER'],
-  JOHNSONJOHNSON: ['JNJ', 'JOHNSON', 'JOHNSONJOHNSON'],
-  MCDONALDS: ['MCD', 'MCDONALDS', 'MCDONALD'],
-  COCACOLA: ['KO', 'COCACOLA', 'COKE'],
-  VISA: ['V', 'VISA'],
-  MASTERCARD: ['MA', 'MASTERCARD'],
-  DISNEY: ['DIS', 'DISNEY', 'WALTDISNEY'],
-  NETFLIX: ['NFLX', 'NETFLIX'],
-  NIKE: ['NKE', 'NIKE'],
-  WALMART: ['WMT', 'WALMART'],
-  ALIBABA: ['BABA', 'ALIBABA'],
   // Indices
   SP500: ['US500', 'SPX', 'SP500', 'STANDARDPOORS'],
   NASDAQ: ['US100', 'NAS100', 'NDX', 'NASDAQ', 'NASDAQ100'],
@@ -301,7 +282,15 @@ function isOnTargetSite(pageUrl: string): boolean {
 }
 
 async function ensurePageOnTarget(page: Page): Promise<void> {
-  if (!isOnTargetSite(page.url())) {
+  const currentUrl = page.url();
+  
+  // 24/7 RESILIENCE: Detect Session Expiry / Logout
+  if (currentUrl.includes('/sign-in') || currentUrl.includes('/login')) {
+    logger.error('CRITICAL: Quotex session expired. The browser is on the login screen. You must open the Chrome profile manually and log back in.');
+    throw new Error('QUOTEX_LOGGED_OUT');
+  }
+
+  if (!isOnTargetSite(currentUrl)) {
     let defaultAccount: 'Live' | 'Demo' = 'Live';
     try {
       const settingsPath = path.join(process.cwd(), 'cortex-settings.json');
@@ -358,9 +347,6 @@ async function getBrowserAndPage(launchIfNeeded: boolean = true): Promise<{ cont
             '--test-type' // Suppresses security warning banners
           ]
         });
-        
-        // CRITICAL: Inject stealth script to hide Playwright from Cloudflare
-        await globalContext.addInitScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
         
         // CRITICAL: Polyfill for tsx/esbuild __name wrapper in Playwright evaluate closures
         await globalContext.addInitScript("window.__name = (target, value) => Object.defineProperty(target, 'name', { value, configurable: true }); window.__defProp = Object.defineProperty;");
@@ -1095,37 +1081,6 @@ export async function clickTradeButton(
   throw new Error(`Could not find or click ${word} button. ${debug}`);
 }
 
-/**
- * Switches the account type between Live and Demo via direct URL navigation.
- */
-export async function switchAccountType(page: Page, type: 'Live' | 'Demo'): Promise<boolean> {
-  logger.browser(`🔄 Switching account type to ${type} Account via URL...`);
-  try {
-    let targetUrl = config.targetUrl;
-    try {
-      const baseUrl = new URL(config.targetUrl).origin;
-      targetUrl = type === 'Demo' ? `${baseUrl}/en/demo-trade` : `${baseUrl}/en/trade`;
-    } catch {}
-
-    // Avoid unnecessary navigation if already on the correct URL (or a close variant)
-    const currentUrl = page.url();
-    const isAlreadyCorrect = type === 'Demo' ? currentUrl.includes('/demo-trade') : (currentUrl.includes('/trade') && !currentUrl.includes('/demo-trade'));
-    
-    if (!isAlreadyCorrect) {
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: config.browserTimeoutMs });
-      await page.waitForTimeout(1000); // Give the app a moment to render
-    } else {
-      logger.browser(`⚡ Already on ${type} Account URL. Skipping navigation.`);
-    }
-
-    logger.browser(`✅ Successfully switched to ${type} Account.`);
-    return true;
-  } catch (error) {
-    logger.error(`❌ Failed to switch to ${type} Account`, error);
-    return false;
-  }
-}
-
 export async function executeAutomation(signal: TradeSignal): Promise<ExecutionResult> {
   const startTime = Date.now();
   ensureDirectories();
@@ -1175,17 +1130,6 @@ export async function executeAutomation(signal: TradeSignal): Promise<ExecutionR
         durationMs: Date.now() - startTime,
         details: balance ? 'Balance extracted successfully' : 'Balance extraction failed to parse DOM',
         balance: balance || undefined,
-      };
-    }
-
-    if (signal.action === 'SWITCH_LIVE' || signal.action === 'SWITCH_DEMO') {
-      const type = signal.action === 'SWITCH_LIVE' ? 'Live' : 'Demo';
-      const switched = await switchAccountType(page, type);
-      return {
-        success: switched,
-        signal,
-        durationMs: Date.now() - startTime,
-        details: switched ? `Switched to ${type} Account` : `Failed to switch to ${type} Account`,
       };
     }
 

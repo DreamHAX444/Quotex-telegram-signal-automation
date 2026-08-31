@@ -14,6 +14,8 @@ import type { AutomationTask, TradeSignal } from './types.js';
 import { systemStats } from './stats.js';
 import { systemEvents, type ChannelMessageRecord } from './events.js';
 
+
+
 /**
  * Validates session string before initializing GramJS
  */
@@ -36,8 +38,8 @@ if (!config.sessionString || config.sessionString === 'YOUR_GENERATED_SESSION_ST
 /**
  * Initializes the GramJS Telegram UserBot Client
  */
-export const session = new StringSession(config.sessionString);
-export const client = new TelegramClient(session, config.apiId, config.apiHash, {
+const session = new StringSession(config.sessionString);
+const client = new TelegramClient(session, config.apiId, config.apiHash, {
   connectionRetries: 10,
   useWSS: false,
   autoReconnect: true,
@@ -458,12 +460,15 @@ async function resolveTargetChannel(): Promise<void> {
   }
 }
 
+let pullBackoffUntil = 0;
+
 /**
  * High-Frequency Active Channel Puller / Sync Loop (Layer 2 Puller)
- * Actively pulls latest messages from target channel every 1.5 seconds.
+ * Actively pulls latest messages from target channel to guarantee delivery.
  */
 async function pullLatestChannelMessages(): Promise<void> {
   if (isPullingActive || !client.connected) return;
+  if (Date.now() < pullBackoffUntil) return; // Respect rate limit backoff
   isPullingActive = true;
 
   try {
@@ -490,8 +495,21 @@ async function pullLatestChannelMessages(): Promise<void> {
         }
       }
     }
-  } catch {
-    // Non-blocking catch for transient network ticks
+  } catch (err: any) {
+    const errorMsg = err?.errorMessage || err?.message || String(err);
+    if (errorMsg.includes('FLOOD_WAIT')) {
+      const match = errorMsg.match(/\d+/);
+      const seconds = match ? parseInt(match[0], 10) : 30;
+      pullBackoffUntil = Date.now() + (seconds * 1000);
+      logger.warn(`Telegram rate limit (FLOOD_WAIT) on active puller. Backing off for ${seconds} seconds.`);
+      
+      systemEvents.recordConnectionLog({
+        id: 'flood-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        type: 'ERROR',
+        message: `Active puller rate limited. Pausing puller for ${seconds}s.`,
+      });
+    }
   } finally {
     isPullingActive = false;
   }
@@ -504,29 +522,42 @@ export async function forceFetchChannelMessages(limit = 30): Promise<ChannelMess
   if (!client.connected) {
     throw new Error('Telegram Client is not connected');
   }
-  const target = resolvedTargetEntity || new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
-  const messages = await client.getMessages(target, { limit });
-  const records: ChannelMessageRecord[] = [];
 
-  for (const msg of messages) {
-    if (!msg || !msg.message) continue;
-    const senderName = msg.postAuthor || (msg.sender ? (msg.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
-    const rawText = msg.message || '';
-    const signal = parseSignal(rawText);
-    const rec: ChannelMessageRecord = {
-      id: 'msg-' + msg.id,
-      messageId: msg.id,
-      channelId: config.vipChannelIdRaw,
-      date: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
-      senderName,
-      text: rawText,
-      isSignal: !!signal,
-      signal: signal || undefined,
-    };
-    records.push(rec);
-    systemEvents.recordChannelMessage(rec);
+  try {
+    const target = resolvedTargetEntity || new Api.PeerChannel({ channelId: config.vipChannelIdBigInt as any });
+    const messages = await client.getMessages(target, { limit });
+    const records: ChannelMessageRecord[] = [];
+
+    for (const msg of messages) {
+      if (!msg || !msg.message) continue;
+      const senderName = msg.postAuthor || (msg.sender ? (msg.sender as any).firstName : 'Channel Admin') || 'VIP Channel';
+      const rawText = msg.message || '';
+      const signal = parseSignal(rawText);
+      const rec: ChannelMessageRecord = {
+        id: 'msg-' + msg.id,
+        messageId: msg.id,
+        channelId: config.vipChannelIdRaw,
+        date: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
+        senderName,
+        text: rawText,
+        isSignal: !!signal,
+        signal: signal || undefined,
+      };
+      records.push(rec);
+      systemEvents.recordChannelMessage(rec);
+    }
+    return records;
+  } catch (err: any) {
+    const errorMsg = err?.errorMessage || err?.message || String(err);
+    if (errorMsg.includes('FLOOD_WAIT')) {
+      const match = errorMsg.match(/\d+/);
+      const seconds = match ? parseInt(match[0], 10) : 30;
+      pullBackoffUntil = Math.max(pullBackoffUntil, Date.now() + (seconds * 1000));
+      logger.warn(`Manual pull rate limited. Backing off for ${seconds} seconds.`);
+      throw new Error(`Telegram rate limit exceeded. Please wait ${seconds} seconds before trying again.`);
+    }
+    throw err;
   }
-  return records;
 }
 
 /**
@@ -562,10 +593,17 @@ export async function pingTelegramConnection(): Promise<{ success: boolean; late
   }
 }
 
+let isReconnectingInProgress = false;
+
 /**
  * Force reconnect Telegram client
  */
 export async function reconnectTelegramClient(): Promise<boolean> {
+  if (isReconnectingInProgress) {
+    logger.warn('Reconnect already in progress, skipping concurrent trigger.');
+    return false;
+  }
+  isReconnectingInProgress = true;
   try {
     systemEvents.recordConnectionLog({
       id: 'recon-' + Date.now(),
@@ -596,6 +634,8 @@ export async function reconnectTelegramClient(): Promise<boolean> {
     });
     systemEvents.emit('telemetry:update', systemStats);
     return false;
+  } finally {
+    isReconnectingInProgress = false;
   }
 }
 
@@ -708,10 +748,10 @@ async function bootstrap(): Promise<void> {
       await resolveTargetChannel();
     });
 
-    // Layer 2 Active Channel Puller Interval (polls every 1500ms)
+    // Layer 2 Active Channel Puller Interval (polls every 3500ms)
     pullIntervalRef = setInterval(() => {
       void pullLatestChannelMessages();
-    }, 1500);
+    }, 3500);
 
     // Aggressive Active Ping (Keep-Alive & Zombie Connection Slayer)
     keepAliveIntervalRef = setInterval(async () => {

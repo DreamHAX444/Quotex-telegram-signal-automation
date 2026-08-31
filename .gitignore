@@ -6,3 +6,6 @@ screenshots/
 *.log
 test_log.txt
 cortex-settings.json
+.vite/
+.DS_Store
+Thumbs.db

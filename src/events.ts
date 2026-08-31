@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { AccountBalance, TradeSignal } from './types.js';
 
-export interface ExecutedTradeRecord {
+interface ExecutedTradeRecord {
   id: string;
   timestamp: string;
   signal: TradeSignal;
@@ -23,31 +23,13 @@ export interface ChannelMessageRecord {
   signal?: TradeSignal | undefined;
 }
 
-export interface ConnectionLogRecord {
+interface ConnectionLogRecord {
   id: string;
   timestamp: string;
   type: 'CONNECT' | 'DISCONNECT' | 'PING' | 'RECONNECT' | 'RESOLVE' | 'ERROR' | 'INFO';
   message: string;
   details?: string | undefined;
   latencyMs?: number | undefined;
-}
-
-export interface SystemTelemetryState {
-  status: string;
-  lastCheckedAt: number;
-  lastPingAt: number;
-  lastMessageAt: number;
-  messagesProcessed: number;
-  messagesIgnored: number;
-  startedAt: number;
-  queuePending: number;
-  queueSize: number;
-  isQueuePaused: boolean;
-  accountUsername?: string | undefined;
-  accountId?: string | undefined;
-  channelTitle?: string | undefined;
-  channelType?: string | undefined;
-  channelMembers?: number | undefined;
 }
 
 class SystemEventBus extends EventEmitter {

@@ -26,14 +26,19 @@ export function LogsViewer({ logs, onClear }: LogsViewerProps) {
 
   // Filter logs based on level and search query
   const filteredLogs = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const lvl = filterLevel.toUpperCase();
     return logs.filter((log) => {
-      const matchesLevel = filterLevel === 'ALL' || log.level.toUpperCase() === filterLevel;
-      const matchesSearch =
-        !searchQuery ||
-        log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        log.level.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (log.meta && JSON.stringify(log.meta).toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchesLevel && matchesSearch;
+      const matchesLevel = lvl === 'ALL' || log.level.toUpperCase() === lvl;
+      if (!matchesLevel) return false;
+      if (!q) return true;
+      if (log.message.toLowerCase().includes(q)) return true;
+      if (log.level.toLowerCase().includes(q)) return true;
+      if (log.meta) {
+        const metaStr = typeof log.meta === 'string' ? log.meta : JSON.stringify(log.meta);
+        if (metaStr.toLowerCase().includes(q)) return true;
+      }
+      return false;
     });
   }, [logs, filterLevel, searchQuery]);
 
